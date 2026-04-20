@@ -112,7 +112,7 @@ export function InvoiceForm() {
         party: "Customer",
         contact: "Customer contact",
         create: "Create receivable",
-        draft: "Save receivable draft",
+        draft: "Save draft",
         description: "Capture money owed by a customer with the required finance details first.",
         typeLabel: "Collect",
         oppositeLabel: "Pay"
@@ -121,7 +121,7 @@ export function InvoiceForm() {
         party: "Vendor",
         contact: "Vendor contact",
         create: "Create payable",
-        draft: "Save payable draft",
+        draft: "Save draft",
         description: "Capture a vendor obligation and plan the outgoing payment timing.",
         typeLabel: "Pay",
         oppositeLabel: "Collect"
@@ -699,7 +699,7 @@ export function InvoiceForm() {
         </aside>
       </form>
 
-      <div className="sticky bottom-20 z-20 mt-4 rounded-lg border border-ink-200 bg-white/95 p-3 shadow-luxury backdrop-blur xl:hidden">
+      <div className="mt-4 rounded-lg border border-ink-200 bg-white p-4 shadow-soft xl:hidden">
         <ActionButtons
           createLabel={typeCopy.create}
           draftLabel={typeCopy.draft}
@@ -758,12 +758,12 @@ function ActionButtons({
   compact?: boolean;
 }) {
   return (
-    <div className={cn("grid gap-2", compact ? "grid-cols-2" : "")}>
+    <div className="grid gap-2.5">
       <Button
         type="submit"
         form={formId}
         size={compact ? "md" : "lg"}
-        className={compact ? "col-span-2 w-full" : "w-full"}
+        className="min-w-0 w-full whitespace-normal"
         disabled={isSubmitting}
         onClick={() => onIntent("create")}
       >
@@ -774,7 +774,7 @@ function ActionButtons({
         type="submit"
         form={formId}
         variant="secondary"
-        className="w-full"
+        className="min-w-0 w-full whitespace-normal"
         disabled={isSubmitting}
         onClick={() => onIntent("draft")}
       >
@@ -785,14 +785,14 @@ function ActionButtons({
         type="submit"
         form={formId}
         variant="secondary"
-        className="w-full"
+        className="min-w-0 w-full whitespace-normal"
         disabled={isSubmitting}
         onClick={() => onIntent("another")}
       >
         <Plus className="size-4" />
         Add another
       </Button>
-      <Button type="button" variant="ghost" className="w-full" onClick={onCancel}>
+      <Button type="button" variant="ghost" className="min-w-0 w-full whitespace-normal" onClick={onCancel}>
         Cancel
       </Button>
     </div>
