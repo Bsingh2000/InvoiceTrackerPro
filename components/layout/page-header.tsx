@@ -18,7 +18,7 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        "sticky top-16 z-20 -mx-4 mb-5 border-b border-ink-100 bg-ink-50/90 px-4 py-4 backdrop-blur lg:top-0 lg:-mx-8 lg:mb-7 lg:px-8",
+        "mb-6 border-b border-ink-100 pb-5 sm:mb-7",
         className
       )}
     >
@@ -38,7 +38,11 @@ export function PageHeader({
             </p>
           ) : null}
         </div>
-        {action ? <div className="flex shrink-0 flex-wrap gap-3">{action}</div> : null}
+        {action ? (
+          <div className="flex w-full flex-wrap gap-3 [&>*]:w-full sm:w-auto sm:shrink-0 sm:[&>*]:w-auto">
+            {action}
+          </div>
+        ) : null}
       </div>
     </div>
   );
