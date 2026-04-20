@@ -42,10 +42,18 @@ textarea {
   }
 
   .field-control {
-    @apply mt-2 min-h-11 w-full rounded-lg border-ink-200 bg-white text-sm text-ink-900 shadow-none transition placeholder:text-ink-400 focus:border-emerald-600 focus:ring-emerald-600;
+    @apply mt-2 min-h-11 w-full rounded-lg border-ink-200 bg-white text-base text-ink-900 shadow-none transition placeholder:text-ink-400 focus:border-emerald-600 focus:ring-emerald-600 md:text-sm;
   }
 
   .field-error {
     @apply mt-1.5 text-sm font-medium text-garnet-700;
+  }
+}
+
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }

@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { useAuth } from "@/components/providers/auth-provider";
 import { useInvoices } from "@/components/providers/invoice-provider";
 import { getShellAlertSummary } from "@/lib/alert-summary";
 import {
@@ -24,6 +25,7 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const { invoices } = useInvoices();
+  const { user, workspace, signOut } = useAuth();
   useAlertRefreshToken();
   const alertSummary = getShellAlertSummary(invoices);
 
@@ -114,7 +116,28 @@ export function Sidebar({
             </div>
           ))}
         </nav>
-
+      </div>
+      <div className={cn("mt-4 border-t border-ink-100 pt-4", collapsed ? "w-full" : "")}>
+        {!collapsed ? (
+          <div className="mb-3 rounded-lg border border-ink-100 bg-ink-50/75 p-3">
+            <p className="truncate text-sm font-black text-ink-900">{workspace.name}</p>
+            <p className="mt-1 truncate text-xs font-semibold text-ink-500">
+              {user.email}
+            </p>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          className={cn(
+            "group relative flex min-h-10 w-full items-center rounded-lg text-sm font-semibold text-ink-600 transition hover:bg-ink-50 hover:text-ink-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600",
+            collapsed ? "mx-auto size-10 justify-center px-0" : "gap-3 px-3"
+          )}
+          onClick={() => void signOut()}
+          title="Sign out"
+        >
+          <LogOut className="size-4 shrink-0 text-ink-400 group-hover:text-ink-700" />
+          {!collapsed ? <span>Sign out</span> : <Tooltip label="Sign out" />}
+        </button>
       </div>
     </aside>
   );

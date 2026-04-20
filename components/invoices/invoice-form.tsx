@@ -59,6 +59,7 @@ export function InvoiceForm() {
   const [tagDraft, setTagDraft] = useState("");
   const [submitIntent, setSubmitIntent] = useState<SubmitIntent>("create");
   const [saved, setSaved] = useState(false);
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
 
   const initialInvoiceNumber = useMemo(
     () => makeInvoiceNumber(defaultType, invoices),
@@ -168,29 +169,39 @@ export function InvoiceForm() {
   const partialRegister = register("amountPaid", { setValueAs: parseCurrencyInput });
   const dueDateRegister = register("dueDate");
 
-  function submit(values: InvoiceFormValues) {
+  async function submit(values: InvoiceFormValues) {
     const intent = submitIntent;
     const invoiceInput = toInvoiceInput(values, intent);
-    const created = addInvoice(invoiceInput);
-    setSaved(true);
 
-    notify({
-      title: intent === "draft" ? "Draft saved" : "Invoice created",
-      description: `${created.invoiceNumber} was added to the active ledger.`,
-      variant: "success"
-    });
+    try {
+      const created = await addInvoice(invoiceInput, { attachmentFile });
+      setSaved(true);
 
-    if (intent === "another") {
-      const nextType = values.type;
-      setInvoiceNumberEdited(false);
-      setTagDraft("");
-      reset(makeDefaultValues(nextType, makeInvoiceNumber(nextType, [created, ...invoices])));
-      setPaymentTerm("30");
-      window.setTimeout(() => setSaved(false), 0);
-      return;
+      notify({
+        title: intent === "draft" ? "Draft saved" : "Invoice created",
+        description: `${created.invoiceNumber} was added to the active ledger.`,
+        variant: "success"
+      });
+
+      if (intent === "another") {
+        const nextType = values.type;
+        setInvoiceNumberEdited(false);
+        setTagDraft("");
+        setAttachmentFile(null);
+        reset(makeDefaultValues(nextType, makeInvoiceNumber(nextType, [created, ...invoices])));
+        setPaymentTerm("30");
+        window.setTimeout(() => setSaved(false), 0);
+        return;
+      }
+
+      router.push(`/invoices/${created.id}`);
+    } catch (error) {
+      notify({
+        title: "Invoice could not be saved",
+        description: error instanceof Error ? error.message : "Supabase rejected the invoice save request.",
+        variant: "warning"
+      });
     }
-
-    router.push(`/invoices/${created.id}`);
   }
 
   function toInvoiceInput(values: InvoiceFormValues, intent: SubmitIntent): InvoiceInput {
@@ -528,7 +539,7 @@ export function InvoiceForm() {
                       <p className="truncate text-sm font-semibold text-ink-800">
                         {attachmentName || "No attachment uploaded"}
                       </p>
-                      <p className="text-xs text-ink-500">File name is stored now; upload storage can be connected later.</p>
+                      <p className="text-xs text-ink-500">Stored securely when you save the invoice.</p>
                     </div>
                   </div>
                   <label className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg border border-ink-200 bg-white px-3 text-sm font-semibold text-ink-700 transition hover:bg-ink-50">
@@ -537,7 +548,8 @@ export function InvoiceForm() {
                       type="file"
                       className="sr-only"
                       onChange={(event) => {
-                        const file = event.target.files?.[0];
+                        const file = event.target.files?.[0] ?? null;
+                        setAttachmentFile(file);
                         setValue("attachmentName", file?.name || "", { shouldDirty: true, shouldValidate: true });
                       }}
                     />

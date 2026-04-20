@@ -12,16 +12,19 @@ import {
   Save,
   Send,
   ShieldCheck,
+  UserPlus,
+  Users,
   WalletCards
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { useAuth } from "@/components/providers/auth-provider";
 import { useInvoices } from "@/components/providers/invoice-provider";
 import { useToast } from "@/components/providers/toast-provider";
 import { Button } from "@/components/ui/button";
 import { Card, SectionCard } from "@/components/ui/card";
-import { currencies, formatCurrency } from "@/lib/format";
+import { currencies, formatCurrency, formatDateTime } from "@/lib/format";
 import type {
   MonthEndInvoiceSnapshot,
   MonthEndSummary,
@@ -90,6 +93,26 @@ type EmailPreviewState = {
   email: RenderedMonthEndEmail;
 } | null;
 
+type WorkspaceUser = {
+  id: string;
+  membershipId: string;
+  fullName: string;
+  email: string;
+  role: string;
+  addedAt: string;
+};
+
+type WorkspaceUsersResponse = {
+  users?: WorkspaceUser[];
+  error?: string;
+};
+
+type InviteUserResponse = {
+  invited?: boolean;
+  user?: WorkspaceUser;
+  error?: string;
+};
+
 const defaultSettings: WorkspaceSettings = {
   businessName: "Sterling Ledger Studio",
   financeEmail: "finance@example.com",
@@ -128,6 +151,7 @@ const defaultSettings: WorkspaceSettings = {
 };
 
 export function SettingsView() {
+  const { workspace } = useAuth();
   const { invoices, resetDemoData } = useInvoices();
   const { notify } = useToast();
   const [settings, setSettings] = useState<WorkspaceSettings>(defaultSettings);
@@ -138,6 +162,13 @@ export function SettingsView() {
   const [emailToolMessage, setEmailToolMessage] = useState<EmailToolMessage | null>(null);
   const [emailLoading, setEmailLoading] = useState<"preview" | "send" | null>(null);
   const [lastEmailAttempt, setLastEmailAttempt] = useState<string | null>(null);
+  const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [inviteFullName, setInviteFullName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const canManageUsers = workspace.role === "owner" || workspace.role === "admin";
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -199,6 +230,85 @@ export function SettingsView() {
     });
   }
 
+  const loadWorkspaceUsers = useCallback(async () => {
+    setUsersLoading(true);
+
+    try {
+      const response = await fetch("/api/workspace/users", {
+        headers: {
+          "X-Requested-With": "invoice-tracker-settings"
+        }
+      });
+      const data = (await response.json()) as WorkspaceUsersResponse;
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Workspace users could not be loaded.");
+      }
+
+      setWorkspaceUsers(data.users ?? []);
+    } catch (error) {
+      notify({
+        title: "Users could not be loaded",
+        description: error instanceof Error ? error.message : "The users list is unavailable.",
+        variant: "warning"
+      });
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    if (!canManageUsers) {
+      return;
+    }
+
+    void loadWorkspaceUsers();
+  }, [canManageUsers, loadWorkspaceUsers]);
+
+  async function inviteWorkspaceUser() {
+    setInviteLoading(true);
+
+    try {
+      const response = await fetch("/api/workspace/users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "invoice-tracker-settings"
+        },
+        body: JSON.stringify({
+          fullName: inviteFullName,
+          email: inviteEmail,
+          role: inviteRole
+        })
+      });
+      const data = (await response.json()) as InviteUserResponse;
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Invite could not be sent.");
+      }
+
+      setInviteFullName("");
+      setInviteEmail("");
+      setInviteRole("member");
+      await loadWorkspaceUsers();
+      notify({
+        title: data.invited ? "Invite sent" : "User added",
+        description: data.invited
+          ? `${data.user?.email ?? inviteEmail} was invited to set a password.`
+          : `${data.user?.email ?? inviteEmail} already has an account and can sign in.`,
+        variant: "success"
+      });
+    } catch (error) {
+      notify({
+        title: "Invite failed",
+        description: error instanceof Error ? error.message : "The user could not be invited.",
+        variant: "warning"
+      });
+    } finally {
+      setInviteLoading(false);
+    }
+  }
+
   function saveChanges() {
     const next = normalizeSettings(settings);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -236,19 +346,27 @@ export function SettingsView() {
     });
   }
 
-  function handleDemoReset() {
+  async function handleDemoReset() {
     if (!window.confirm("Reset invoices and local demo workflow data?")) {
       return;
     }
 
-    resetDemoData();
-    window.localStorage.removeItem(ALERT_WORKFLOW_KEY);
-    window.dispatchEvent(new Event("invoice-tracker:alert-workflow-updated"));
-    notify({
-      title: "Demo data reset",
-      description: "Invoices and local workflow states were restored to the sample dataset.",
-      variant: "success"
-    });
+    try {
+      await resetDemoData();
+      window.localStorage.removeItem(ALERT_WORKFLOW_KEY);
+      window.dispatchEvent(new Event("invoice-tracker:alert-workflow-updated"));
+      notify({
+        title: "Demo data reset",
+        description: "Invoices and local workflow states were restored to the sample dataset.",
+        variant: "success"
+      });
+    } catch (error) {
+      notify({
+        title: "Demo data could not be reset",
+        description: error instanceof Error ? error.message : "Supabase could not restore the sample dataset.",
+        variant: "warning"
+      });
+    }
   }
 
   async function previewMonthEndEmail() {
@@ -745,6 +863,21 @@ export function SettingsView() {
             </div>
           </SectionCard>
 
+          <UserManagement
+            canManageUsers={canManageUsers}
+            users={workspaceUsers}
+            usersLoading={usersLoading}
+            inviteFullName={inviteFullName}
+            inviteEmail={inviteEmail}
+            inviteRole={inviteRole}
+            inviteLoading={inviteLoading}
+            onInviteFullNameChange={setInviteFullName}
+            onInviteEmailChange={setInviteEmail}
+            onInviteRoleChange={setInviteRole}
+            onInvite={inviteWorkspaceUser}
+            onRefresh={loadWorkspaceUsers}
+          />
+
           <EmailTools
             recipients={emailRecipients}
             onRecipientsChange={setEmailRecipients}
@@ -886,6 +1019,160 @@ function ToggleRow({
         <span className="mt-1 block text-sm leading-5 text-ink-600">{description}</span>
       </span>
     </label>
+  );
+}
+
+function UserManagement({
+  canManageUsers,
+  users,
+  usersLoading,
+  inviteFullName,
+  inviteEmail,
+  inviteRole,
+  inviteLoading,
+  onInviteFullNameChange,
+  onInviteEmailChange,
+  onInviteRoleChange,
+  onInvite,
+  onRefresh
+}: {
+  canManageUsers: boolean;
+  users: WorkspaceUser[];
+  usersLoading: boolean;
+  inviteFullName: string;
+  inviteEmail: string;
+  inviteRole: string;
+  inviteLoading: boolean;
+  onInviteFullNameChange: (value: string) => void;
+  onInviteEmailChange: (value: string) => void;
+  onInviteRoleChange: (value: string) => void;
+  onInvite: () => Promise<void>;
+  onRefresh: () => Promise<void>;
+}) {
+  function submitInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void onInvite();
+  }
+
+  return (
+    <SectionCard
+      title="Users"
+      eyebrow="Invite-only access"
+      action={<SectionIcon icon={<Users className="size-5" />} />}
+    >
+      {canManageUsers ? (
+        <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+          <form className="grid gap-4" onSubmit={submitInvite}>
+            <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-4">
+              <p className="text-sm font-black text-emerald-900">Admin invite flow</p>
+              <p className="mt-1 text-sm leading-6 text-emerald-900/80">
+                Invited users receive a Supabase email link, set a password, then sign in.
+              </p>
+            </div>
+
+            <Field label="Full name">
+              <input
+                className="field-control"
+                value={inviteFullName}
+                onChange={(event) => onInviteFullNameChange(event.target.value)}
+                autoComplete="name"
+                required
+              />
+            </Field>
+
+            <Field label="Email address">
+              <input
+                className="field-control"
+                type="email"
+                value={inviteEmail}
+                onChange={(event) => onInviteEmailChange(event.target.value)}
+                autoComplete="email"
+                required
+              />
+            </Field>
+
+            <Field label="Workspace role">
+              <select
+                className="field-control"
+                value={inviteRole}
+                onChange={(event) => onInviteRoleChange(event.target.value)}
+              >
+                <option value="member">Member</option>
+                <option value="viewer">Viewer</option>
+                <option value="admin">Admin</option>
+              </select>
+            </Field>
+
+            <Button type="submit" disabled={inviteLoading}>
+              <UserPlus className="size-4" />
+              {inviteLoading ? "Sending invite..." : "Invite user"}
+            </Button>
+          </form>
+
+          <div className="min-w-0">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-black text-ink-900">Workspace users</p>
+                <p className="mt-1 text-sm leading-5 text-ink-600">
+                  {users.length} user{users.length === 1 ? "" : "s"} can access this workspace.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void onRefresh()}
+                disabled={usersLoading}
+              >
+                {usersLoading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {usersLoading && !users.length ? (
+                <p className="rounded-lg border border-ink-100 bg-ink-50 p-3 text-sm font-semibold text-ink-500">
+                  Loading users...
+                </p>
+              ) : null}
+
+              {!usersLoading && !users.length ? (
+                <p className="rounded-lg border border-ink-100 bg-ink-50 p-3 text-sm font-semibold text-ink-500">
+                  No workspace users loaded yet.
+                </p>
+              ) : null}
+
+              {users.map((user) => (
+                <div
+                  key={user.membershipId}
+                  className="flex flex-col gap-3 rounded-lg border border-ink-100 bg-ink-50/65 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-ink-900">
+                      {user.fullName || user.email || "Invited user"}
+                    </p>
+                    <p className="mt-1 truncate text-sm font-semibold text-ink-500">
+                      {user.email || "Email pending"}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-ink-400">
+                      Added {formatDateTime(user.addedAt)}
+                    </p>
+                  </div>
+                  <span className="w-fit rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-600">
+                    {user.role}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-citrine-100 bg-citrine-50/60 p-4">
+          <p className="text-sm font-black text-citrine-900">Owner or admin access required</p>
+          <p className="mt-1 text-sm leading-6 text-citrine-900/80">
+            Your role can use the workspace, but only owners and admins can invite users.
+          </p>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -1233,7 +1520,7 @@ function AdvancedTools({ onDemoReset }: { onDemoReset: () => void }) {
               Persistence status
             </p>
             <p className="mt-2 text-sm leading-6 text-ink-600">
-              Settings and invoices are stored locally in this build. The UI is structured so persistence can move to a database later.
+              Invoices are stored in Supabase for the active workspace. Settings and alert view preferences still use this browser.
             </p>
           </div>
           <div className="rounded-lg border border-garnet-100 bg-garnet-50/40 p-4">

@@ -41,7 +41,14 @@ import {
   getTypeLabel
 } from "@/lib/invoice-helpers";
 import { mockActivity } from "@/lib/mock-data";
-import type { ActivityEvent, Invoice, InvoiceInput, InvoicePriority, InvoiceStatus } from "@/lib/types";
+import type {
+  ActivityEvent,
+  Invoice,
+  InvoiceInput,
+  InvoicePayment,
+  InvoicePriority,
+  InvoiceStatus
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const statuses: InvoiceStatus[] = [
@@ -64,7 +71,8 @@ export function InvoiceDetailView({ id }: { id: string }) {
     updateInvoice,
     markAsPaid,
     recordPartialPayment,
-    deleteInvoice
+    deleteInvoice,
+    getPaymentsForInvoice
   } = useInvoices();
   const { notify } = useToast();
   const invoice = invoices.find((item) => item.id === id);
@@ -106,6 +114,8 @@ export function InvoiceDetailView({ id }: { id: string }) {
   }
 
   const displayStatus = getOperationalStatus(invoice);
+  const payments = getPaymentsForInvoice(invoice.id);
+  const lastPayment = payments[0];
   const balance = invoiceBalance(invoice);
   const paidPercent = percentage(invoice.amountPaid, invoice.amount);
   const canPay = canReceivePayment(invoice);
@@ -114,7 +124,15 @@ export function InvoiceDetailView({ id }: { id: string }) {
   const partyLabel = getPartyLabel(invoice);
   const lastReminder = getLastReminder(invoice.id);
 
-  function handleMarkPaid() {
+  function notifyMutationError(title: string, error: unknown) {
+    notify({
+      title,
+      description: error instanceof Error ? error.message : "Supabase could not complete the request.",
+      variant: "warning"
+    });
+  }
+
+  async function handleMarkPaid() {
     if (!invoice) {
       return;
     }
@@ -123,15 +141,19 @@ export function InvoiceDetailView({ id }: { id: string }) {
       return;
     }
 
-    markAsPaid(invoice.id);
-    notify({
-      title: "Invoice marked paid",
-      description: `${invoice.invoiceNumber} now has a zero balance.`,
-      variant: "success"
-    });
+    try {
+      await markAsPaid(invoice.id);
+      notify({
+        title: "Invoice marked paid",
+        description: `${invoice.invoiceNumber} now has a zero balance.`,
+        variant: "success"
+      });
+    } catch (error) {
+      notifyMutationError("Invoice could not be marked paid", error);
+    }
   }
 
-  function handlePartialPayment() {
+  async function handlePartialPayment() {
     if (!invoice) {
       return;
     }
@@ -165,30 +187,38 @@ export function InvoiceDetailView({ id }: { id: string }) {
       return;
     }
 
-    recordPartialPayment(invoice.id, amount);
-    setPartialAmount("");
-    notify({
-      title: "Payment recorded",
-      description: `${formatCurrency(amount, invoice.currency)} was applied to ${invoice.invoiceNumber}.`,
-      variant: "success"
-    });
+    try {
+      await recordPartialPayment(invoice.id, amount);
+      setPartialAmount("");
+      notify({
+        title: "Payment recorded",
+        description: `${formatCurrency(amount, invoice.currency)} was applied to ${invoice.invoiceNumber}.`,
+        variant: "success"
+      });
+    } catch (error) {
+      notifyMutationError("Payment could not be recorded", error);
+    }
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!invoice) {
       return;
     }
 
-    deleteInvoice(invoice.id);
-    notify({
-      title: "Invoice archived",
-      description: `${invoice.invoiceNumber} was removed from the active ledger.`,
-      variant: "warning"
-    });
-    router.push("/invoices");
+    try {
+      await deleteInvoice(invoice.id);
+      notify({
+        title: "Invoice archived",
+        description: `${invoice.invoiceNumber} was removed from the active ledger.`,
+        variant: "warning"
+      });
+      router.push("/invoices");
+    } catch (error) {
+      notifyMutationError("Invoice could not be archived", error);
+    }
   }
 
-  function saveEdits() {
+  async function saveEdits() {
     if (!invoice) {
       return;
     }
@@ -203,13 +233,17 @@ export function InvoiceDetailView({ id }: { id: string }) {
       patch.amountPaid = 0;
     }
 
-    updateInvoice(invoice.id, patch);
-    setEditing(false);
-    notify({
-      title: "Invoice updated",
-      description: "Status and priority were saved.",
-      variant: "success"
-    });
+    try {
+      await updateInvoice(invoice.id, patch);
+      setEditing(false);
+      notify({
+        title: "Invoice updated",
+        description: "Status and priority were saved.",
+        variant: "success"
+      });
+    } catch (error) {
+      notifyMutationError("Invoice could not be updated", error);
+    }
   }
 
   function sendReminder() {
@@ -224,7 +258,7 @@ export function InvoiceDetailView({ id }: { id: string }) {
     });
   }
 
-  function duplicateInvoice() {
+  async function duplicateInvoice() {
     if (!invoice) {
       return;
     }
@@ -251,14 +285,17 @@ export function InvoiceDetailView({ id }: { id: string }) {
       recurring: invoice.recurring,
       attachmentName: invoice.attachmentName
     };
-    const created = addInvoice(input);
-
-    notify({
-      title: "Invoice duplicated",
-      description: `${created.invoiceNumber} was created as a draft.`,
-      variant: "success"
-    });
-    router.push(`/invoices/${created.id}`);
+    try {
+      const created = await addInvoice(input);
+      notify({
+        title: "Invoice duplicated",
+        description: `${created.invoiceNumber} was created as a draft.`,
+        variant: "success"
+      });
+      router.push(`/invoices/${created.id}`);
+    } catch (error) {
+      notifyMutationError("Invoice could not be duplicated", error);
+    }
   }
 
   function exportInvoice() {
@@ -282,20 +319,24 @@ export function InvoiceDetailView({ id }: { id: string }) {
     });
   }
 
-  function reopenInvoice() {
+  async function reopenInvoice() {
     if (!invoice) {
       return;
     }
 
-    updateInvoice(invoice.id, {
-      status: "Pending",
-      amountPaid: 0
-    });
-    notify({
-      title: "Invoice reopened",
-      description: `${invoice.invoiceNumber} is open again with the original balance.`,
-      variant: "info"
-    });
+    try {
+      await updateInvoice(invoice.id, {
+        status: "Pending",
+        amountPaid: 0
+      });
+      notify({
+        title: "Invoice reopened",
+        description: `${invoice.invoiceNumber} is open again with the original balance.`,
+        variant: "info"
+      });
+    } catch (error) {
+      notifyMutationError("Invoice could not be reopened", error);
+    }
   }
 
   return (
@@ -449,7 +490,7 @@ export function InvoiceDetailView({ id }: { id: string }) {
               <dl className="grid gap-4 text-sm">
                 <DetailItem label="Created" value={formatDateTime(invoice.createdAt)} />
                 <DetailItem label="Last updated" value={formatDateTime(invoice.updatedAt)} />
-                <DetailItem label="Payment date" value={isPaid ? formatDateTime(invoice.updatedAt) : "Not paid"} />
+                <DetailItem label="Last payment" value={lastPayment ? formatDateTime(lastPayment.createdAt) : "Not paid"} />
                 <DetailItem label="Reminder date" value={invoice.reminderDate ? formatDate(invoice.reminderDate) : "Not set"} />
                 <DetailItem label="Last reminder" value={lastReminder ? formatDateTime(lastReminder.createdAt) : "Not sent"} />
               </dl>
@@ -477,6 +518,10 @@ export function InvoiceDetailView({ id }: { id: string }) {
                 </div>
               </div>
             </div>
+          </SectionCard>
+
+          <SectionCard title="Payment history" eyebrow="Payments">
+            <PaymentHistoryTable payments={payments} invoice={invoice} />
           </SectionCard>
         </div>
 
@@ -680,6 +725,99 @@ function TextBlock({ title, value, empty }: { title: string; value?: string; emp
     <div className="rounded-lg border border-ink-100 bg-ink-50/60 p-4">
       <p className="text-sm font-bold text-ink-900">{title}</p>
       <p className="mt-2 text-sm leading-6 text-ink-600">{value?.trim() || empty}</p>
+    </div>
+  );
+}
+
+function PaymentHistoryTable({
+  payments,
+  invoice
+}: {
+  payments: InvoicePayment[];
+  invoice: Invoice;
+}) {
+  if (!payments.length) {
+    return (
+      <div className="rounded-lg border border-ink-100 bg-ink-50/70 p-4">
+        <p className="text-sm font-black text-ink-900">No payments recorded</p>
+        <p className="mt-2 text-sm leading-6 text-ink-600">
+          Record a partial payment or mark the invoice as paid to build the payment history.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-ink-100">
+      <div className="grid gap-3 border-b border-ink-100 bg-ink-50/70 p-4 sm:grid-cols-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-500">Payments</p>
+          <p className="mt-1 text-lg font-black text-ink-900">{payments.length}</p>
+        </div>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-500">Total paid</p>
+          <p className="mt-1 text-lg font-black text-ink-900">
+            {formatCurrency(invoice.amountPaid, invoice.currency)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-500">Remaining</p>
+          <p className="mt-1 text-lg font-black text-ink-900">
+            {formatCurrency(invoiceBalance(invoice), invoice.currency)}
+          </p>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-ink-100 text-left text-sm">
+          <thead className="bg-white">
+            <tr>
+              <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-ink-500">
+                Recorded
+              </th>
+              <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-ink-500">
+                Payment date
+              </th>
+              <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-ink-500">
+                Amount
+              </th>
+              <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-ink-500">
+                Method
+              </th>
+              <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-ink-500">
+                Reference
+              </th>
+              <th className="px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-ink-500">
+                Notes
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-ink-100 bg-white">
+            {payments.map((payment) => (
+              <tr key={payment.id}>
+                <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink-700">
+                  {formatDateTime(payment.createdAt)}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-ink-600">
+                  {formatDate(payment.paymentDate)}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 font-black text-ink-900">
+                  {formatCurrency(payment.amount, payment.currency)}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-ink-600">
+                  {cleanValue(payment.paymentMethod)}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-ink-600">
+                  {cleanValue(payment.referenceNumber)}
+                </td>
+                <td className="min-w-48 px-4 py-3 text-ink-600">
+                  {cleanValue(payment.notes)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

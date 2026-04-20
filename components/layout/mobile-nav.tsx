@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Menu, Plus, X } from "lucide-react";
+import { LogOut, Menu, Plus, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useAuth } from "@/components/providers/auth-provider";
 import { useInvoices } from "@/components/providers/invoice-provider";
 import { getShellAlertSummary } from "@/lib/alert-summary";
 import {
@@ -28,6 +29,7 @@ export function MobileHeader() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const { invoices } = useInvoices();
+  const { user, workspace, signOut } = useAuth();
   useAlertRefreshToken();
   const alertSummary = getShellAlertSummary(invoices);
 
@@ -115,8 +117,22 @@ export function MobileHeader() {
                 <p className="text-xs font-black text-ink-900">Base TTD</p>
               </div>
               <p className="mt-1 text-sm leading-5 text-ink-600">
-                USD enabled. {alertSummary.active} active alert{alertSummary.active === 1 ? "" : "s"}.
+                {workspace.name}. {alertSummary.active} active alert{alertSummary.active === 1 ? "" : "s"}.
               </p>
+              <div className="mt-3 flex items-center justify-between gap-3 border-t border-ink-100 pt-3">
+                <p className="min-w-0 truncate text-xs font-semibold text-ink-500">{user.email}</p>
+                <button
+                  type="button"
+                  className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-ink-200 bg-white px-3 text-xs font-bold text-ink-700"
+                  onClick={() => {
+                    setOpen(false);
+                    void signOut();
+                  }}
+                >
+                  <LogOut className="size-3.5" />
+                  Sign out
+                </button>
+              </div>
             </div>
 
             <Link

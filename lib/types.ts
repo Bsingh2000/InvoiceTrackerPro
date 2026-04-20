@@ -40,6 +40,18 @@ export type Invoice = {
   attachmentName?: string;
 };
 
+export type InvoicePayment = {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  currency: CurrencyCode;
+  paymentDate: string;
+  paymentMethod?: string;
+  referenceNumber?: string;
+  notes?: string;
+  createdAt: string;
+};
+
 export type InvoiceInput = Omit<
   Invoice,
   "id" | "createdAt" | "updatedAt" | "balanceRemaining"
