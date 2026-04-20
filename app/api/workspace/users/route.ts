@@ -48,15 +48,11 @@ export async function POST(request: NextRequest) {
     const role = normalizeRole(body.role);
 
     const existingUser = await findAuthUserByEmail(admin, email);
-    const redirectTo = buildAppUrl(
-      `/auth/callback?next=${encodeURIComponent("/auth/update-password")}`,
-      request.nextUrl.origin
-    );
-    const { authUser, actionLink } = await generateWorkspaceInviteLink(admin, {
+    const { authUser, setupLink } = await generateWorkspaceInviteLink(admin, {
       email,
       fullName,
       existingUser,
-      redirectTo
+      fallbackOrigin: request.nextUrl.origin
     });
 
     if (!authUser?.id) {
@@ -92,7 +88,7 @@ export async function POST(request: NextRequest) {
       email,
       fullName,
       role,
-      actionLink
+      setupLink
     });
 
     return NextResponse.json({
@@ -216,28 +212,26 @@ async function generateWorkspaceInviteLink(
     email,
     fullName,
     existingUser,
-    redirectTo
+    fallbackOrigin
   }: {
     email: string;
     fullName: string;
     existingUser: Awaited<ReturnType<typeof findAuthUserByEmail>>;
-    redirectTo: string;
+    fallbackOrigin: string;
   }
 ) {
   const preferredType = existingUser ? "magiclink" : "invite";
   let result = await generateEmailLink(admin, {
     type: preferredType,
     email,
-    fullName,
-    redirectTo
+    fullName
   });
 
   if (result.error && preferredType === "invite" && isAlreadyRegisteredError(result.error.message)) {
     result = await generateEmailLink(admin, {
       type: "magiclink",
       email,
-      fullName,
-      redirectTo
+      fullName
     });
   }
 
@@ -245,13 +239,19 @@ async function generateWorkspaceInviteLink(
     throw new ApiError(result.error.message, 400);
   }
 
-  const { authUser, actionLink } = result;
+  const { authUser, tokenHash, verificationType } = result;
 
-  if (!authUser?.id || !actionLink) {
+  if (!authUser?.id || !tokenHash || !isInviteVerificationType(verificationType)) {
     throw new ApiError("Supabase did not return a usable invite link.", 500);
   }
 
-  return { authUser, actionLink };
+  const setupLink = buildInviteSetupLink({
+    tokenHash,
+    verificationType,
+    fallbackOrigin
+  });
+
+  return { authUser, setupLink };
 }
 
 async function generateEmailLink(
@@ -259,20 +259,17 @@ async function generateEmailLink(
   {
     type,
     email,
-    fullName,
-    redirectTo
+    fullName
   }: {
     type: "invite" | "magiclink";
     email: string;
     fullName: string;
-    redirectTo: string;
   }
 ) {
   const { data, error } = await admin.auth.admin.generateLink({
     type,
     email,
     options: {
-      redirectTo,
       data: {
         full_name: fullName
       }
@@ -282,7 +279,8 @@ async function generateEmailLink(
   return {
     error,
     authUser: data.user,
-    actionLink: data.properties?.action_link
+    tokenHash: data.properties?.hashed_token,
+    verificationType: data.properties?.verification_type
   };
 }
 
@@ -290,14 +288,14 @@ async function sendWorkspaceInviteEmail({
   email,
   fullName,
   role,
-  actionLink
+  setupLink
 }: {
   email: string;
   fullName: string;
   role: InviteRole;
-  actionLink: string;
+  setupLink: string;
 }) {
-  const emailContent = renderWorkspaceInviteEmail({ fullName, role, actionLink });
+  const emailContent = renderWorkspaceInviteEmail({ fullName, role, setupLink });
   const sendResult = await sendMailerSendEmail({
     to: [email],
     subject: "You're invited to Invoice Tracker Pro",
@@ -313,17 +311,15 @@ async function sendWorkspaceInviteEmail({
 function renderWorkspaceInviteEmail({
   fullName,
   role,
-  actionLink
+  setupLink
 }: {
   fullName: string;
   role: InviteRole;
-  actionLink: string;
+  setupLink: string;
 }) {
-  const firstName = getFirstName(fullName);
-  const safeFirstName = escapeHtml(firstName);
-  const safeFullName = escapeHtml(fullName);
+  const safeFullNameGreeting = escapeHtml(fullName);
   const safeRole = escapeHtml(formatRole(role));
-  const safeActionLink = escapeHtml(actionLink);
+  const safeSetupLink = escapeHtml(setupLink);
 
   const html = `<!doctype html>
 <html lang="en">
@@ -348,13 +344,13 @@ function renderWorkspaceInviteEmail({
             </tr>
             <tr>
               <td style="padding:0 28px 28px;">
-                <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:25px;">Hi ${safeFirstName},</p>
-                <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:25px;">An administrator added ${safeFullName} to Invoice Tracker Pro as a ${safeRole}. Use the secure link below to set your password and open the workspace.</p>
+                <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:25px;">Hi ${safeFullNameGreeting},</p>
+                <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:25px;">An administrator added your account to Invoice Tracker Pro as a ${safeRole}. Use the secure link below to set your password and open the workspace.</p>
                 <p style="margin:26px 0;">
-                  <a href="${safeActionLink}" style="display:inline-block;background:#047857;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;border-radius:8px;padding:13px 20px;">Accept invitation</a>
+                  <a href="${safeSetupLink}" style="display:inline-block;background:#047857;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;border-radius:8px;padding:13px 20px;">Accept invitation</a>
                 </p>
                 <p style="margin:0 0 16px;color:#4b5563;font-size:14px;line-height:22px;">This link is for your account only. If you were not expecting this invite, you can ignore this email.</p>
-                <p style="margin:22px 0 0;color:#6b7280;font-size:12px;line-height:19px;">Button not working? Paste this link into your browser:<br><a href="${safeActionLink}" style="color:#047857;word-break:break-all;">${safeActionLink}</a></p>
+                <p style="margin:22px 0 0;color:#6b7280;font-size:12px;line-height:19px;">Button not working? Paste this link into your browser:<br><a href="${safeSetupLink}" style="color:#047857;word-break:break-all;">${safeSetupLink}</a></p>
               </td>
             </tr>
           </table>
@@ -367,12 +363,12 @@ function renderWorkspaceInviteEmail({
   const text = [
     "You're invited to your invoice workspace",
     "",
-    `Hi ${firstName},`,
+    `Hi ${fullName},`,
     "",
-    `An administrator added ${fullName} to Invoice Tracker Pro as a ${formatRole(role)}.`,
+    `An administrator added your account to Invoice Tracker Pro as a ${formatRole(role)}.`,
     "Use the secure link below to set your password and open the workspace.",
     "",
-    actionLink,
+    setupLink,
     "",
     "If you were not expecting this invite, you can ignore this email."
   ].join("\n");
@@ -380,8 +376,26 @@ function renderWorkspaceInviteEmail({
   return { html, text };
 }
 
-function getFirstName(fullName: string) {
-  return fullName.trim().split(/\s+/)[0] || "there";
+function buildInviteSetupLink({
+  tokenHash,
+  verificationType,
+  fallbackOrigin
+}: {
+  tokenHash: string;
+  verificationType: "invite" | "magiclink";
+  fallbackOrigin: string;
+}) {
+  const params = new URLSearchParams({
+    token_hash: tokenHash,
+    type: verificationType,
+    next: "/auth/update-password"
+  });
+
+  return buildAppUrl(`/auth/accept-invite?${params.toString()}`, fallbackOrigin);
+}
+
+function isInviteVerificationType(value: unknown): value is "invite" | "magiclink" {
+  return value === "invite" || value === "magiclink";
 }
 
 function formatRole(role: InviteRole) {
