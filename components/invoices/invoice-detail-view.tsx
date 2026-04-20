@@ -12,7 +12,7 @@ import {
   Trash2
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { PriorityBadge } from "@/components/invoices/priority-badge";
 import { StatusBadge } from "@/components/invoices/status-badge";
@@ -482,7 +482,10 @@ export function InvoiceDetailView({ id }: { id: string }) {
                 <DetailItem label="Payment method" value={cleanValue(invoice.paymentMethod)} />
                 <DetailItem label="Currency" value={invoice.currency} />
                 <DetailItem label="Due state" value={getAgingLabel(invoice)} />
-                <DetailItem label="Attachment" value={invoice.attachmentName || "No attachment uploaded"} />
+                <DetailItem
+                  label="Attachment"
+                  value={<AttachmentLink invoiceId={invoice.id} fileName={invoice.attachmentName} />}
+                />
               </dl>
             </SectionCard>
 
@@ -711,12 +714,31 @@ function FinancialMetric({
   );
 }
 
-function DetailItem({ label, value }: { label: string; value: string }) {
+function DetailItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-ink-100 pb-3 last:border-0 last:pb-0">
       <dt className="text-ink-500">{label}</dt>
       <dd className="max-w-[60%] text-right font-semibold text-ink-900">{value}</dd>
     </div>
+  );
+}
+
+function AttachmentLink({ invoiceId, fileName }: { invoiceId: string; fileName?: string }) {
+  if (!fileName) {
+    return "No attachment uploaded";
+  }
+
+  return (
+    <a
+      href={`/api/invoices/${invoiceId}/attachment`}
+      target="_blank"
+      rel="noreferrer"
+      title={`View ${fileName}`}
+      className="inline-flex max-w-full items-center justify-end gap-1.5 rounded-md text-right font-black text-emerald-700 underline-offset-4 transition hover:text-emerald-800 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
+    >
+      <span className="min-w-0 break-words">{fileName}</span>
+      <Download className="size-3.5 shrink-0" />
+    </a>
   );
 }
 
