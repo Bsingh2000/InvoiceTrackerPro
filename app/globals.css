@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f7f7f4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 360px;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 360px;
+  overflow-x: hidden;
+  background:
+    linear-gradient(180deg, rgba(238, 253, 247, 0.64), rgba(247, 247, 244, 0) 18rem),
+    #f7f7f4;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: #b2efd7;
+  color: #181917;
+}
+
+@layer components {
+  .field-label {
+    @apply text-sm font-semibold text-ink-800;
+  }
+
+  .field-control {
+    @apply mt-2 min-h-11 w-full rounded-lg border-ink-200 bg-white text-sm text-ink-900 shadow-none transition placeholder:text-ink-400 focus:border-emerald-600 focus:ring-emerald-600;
+  }
+
+  .field-error {
+    @apply mt-1.5 text-sm font-medium text-garnet-700;
+  }
+}
