@@ -193,12 +193,13 @@ Create `.env.local` with the Supabase and email values:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_publishable_key
 SUPABASE_SERVICE_ROLE_KEY=your_server_only_service_role_key
+APP_BASE_URL=https://your-production-domain.com
 email_api_key=your_mailersend_token
 MAIL_FROM_EMAIL=verified-sender@example.com
 MAIL_FROM_NAME=Invoice Tracker Pro
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` is required only for the server-side user invite API. Never prefix it with `NEXT_PUBLIC_`.
+`SUPABASE_SERVICE_ROLE_KEY` is required only for the server-side user invite API. Never prefix it with `NEXT_PUBLIC_`. `APP_BASE_URL` controls the domain used in invite emails, so production should use the deployed site URL instead of localhost.
 
 Apply the Supabase schema migration to a linked project:
 
@@ -238,16 +239,17 @@ npm run lint
 
 ## Email Configuration
 
-Supabase invite emails are sent by Supabase Auth. For production, configure Supabase Auth SMTP and add your app callback URL to the Supabase Auth redirect URLs:
+Supabase Auth generates secure invite links, and the app sends the workspace invite email through MailerSend. For production, set `APP_BASE_URL` to the deployed site and add the app callback URL to the Supabase Auth redirect URLs:
 
 ```text
 http://localhost:3000/auth/callback
 https://your-production-domain.com/auth/callback
 ```
 
-Month-end preview does not require MailerSend credentials. Sending a test email through MailerSend requires these environment variables in `.env.local`:
+Workspace invites and test sending through MailerSend require these environment variables in `.env.local` and in the deployment environment:
 
 ```bash
+APP_BASE_URL=https://your-production-domain.com
 email_api_key=your_mailersend_token
 MAIL_FROM_EMAIL=verified-sender@example.com
 MAIL_FROM_NAME=Invoice Tracker Pro

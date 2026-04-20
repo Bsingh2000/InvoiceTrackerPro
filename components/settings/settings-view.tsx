@@ -294,7 +294,7 @@ export function SettingsView() {
       notify({
         title: data.invited ? "Invite sent" : "User added",
         description: data.invited
-          ? `${data.user?.email ?? inviteEmail} was invited to set a password.`
+          ? `${data.user?.email ?? inviteEmail} was emailed a secure setup link.`
           : `${data.user?.email ?? inviteEmail} already has an account and can sign in.`,
         variant: "success"
       });
@@ -1066,7 +1066,7 @@ function UserManagement({
             <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-4">
               <p className="text-sm font-black text-emerald-900">Admin invite flow</p>
               <p className="mt-1 text-sm leading-6 text-emerald-900/80">
-                Invited users receive a Supabase email link, set a password, then sign in.
+                Invited users receive a secure setup email, set a password, then sign in.
               </p>
             </div>
 
