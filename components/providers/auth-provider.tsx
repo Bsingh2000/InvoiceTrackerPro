@@ -39,6 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [workspace, setWorkspace] = useState<WorkspaceContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [bootstrappedUserId, setBootstrappedUserId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -103,11 +104,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             name: existingWorkspace.name,
             role: existingMembership.role
           });
+          setBootstrappedUserId(user.id);
           return;
         }
 
         throw new Error("This account has not been invited to a workspace yet. Ask an admin to invite this email address from Settings.");
       } catch (error) {
+        setBootstrappedUserId(null);
         setWorkspace(null);
         setBootstrapError(error instanceof Error ? error.message : "Workspace setup failed.");
       } finally {
@@ -123,16 +126,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     if (!session?.user) {
+      setBootstrappedUserId(null);
       setWorkspace(null);
+      setBootstrapError(null);
+      setLoading(false);
+      return;
+    }
+
+    if (bootstrappedUserId === session.user.id && workspace) {
       setLoading(false);
       return;
     }
 
     void bootstrapWorkspace(session.user);
-  }, [bootstrapWorkspace, session, sessionLoaded]);
+  }, [bootstrapWorkspace, bootstrappedUserId, session, sessionLoaded, workspace]);
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
+    setBootstrappedUserId(null);
     setSession(null);
     setWorkspace(null);
   }, [supabase]);
