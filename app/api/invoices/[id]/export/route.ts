@@ -51,6 +51,16 @@ type TagRow = {
   tag: string;
 };
 
+type WorkspaceRow = {
+  name: string;
+};
+
+type WorkspaceSettingsRow = {
+  business_name: string | null;
+  finance_email: string | null;
+  default_payment_terms: string | null;
+};
+
 export async function GET(
   _request: Request,
   {
@@ -93,10 +103,22 @@ export async function GET(
   }
 
   const [
+    { data: workspace, error: workspaceError },
+    { data: workspaceSettings, error: workspaceSettingsError },
     { data: paymentRows, error: paymentError },
     { data: attachmentRows, error: attachmentError },
     { data: tagRows, error: tagError }
   ] = await Promise.all([
+    supabase
+      .from("workspaces")
+      .select("name")
+      .eq("id", invoice.workspace_id)
+      .maybeSingle<WorkspaceRow>(),
+    supabase
+      .from("workspace_settings")
+      .select("business_name, finance_email, default_payment_terms")
+      .eq("workspace_id", invoice.workspace_id)
+      .maybeSingle<WorkspaceSettingsRow>(),
     supabase
       .from("invoice_payments")
       .select("id, amount, currency, payment_date, payment_method, reference_number, notes, created_at")
@@ -119,10 +141,12 @@ export async function GET(
       .returns<TagRow[]>()
   ]);
 
-  if (paymentError || attachmentError || tagError) {
+  if (workspaceError || workspaceSettingsError || paymentError || attachmentError || tagError) {
     return NextResponse.json(
       {
         error:
+          workspaceError?.message ||
+          workspaceSettingsError?.message ||
           paymentError?.message ||
           attachmentError?.message ||
           tagError?.message ||
@@ -157,6 +181,12 @@ export async function GET(
 
   const archive = await buildInvoiceExportPackage({
     invoice,
+    workspace: {
+      name: workspace?.name ?? "Invoice Tracker",
+      businessName: workspaceSettings?.business_name ?? null,
+      financeEmail: workspaceSettings?.finance_email ?? null,
+      defaultPaymentTerms: workspaceSettings?.default_payment_terms ?? null
+    },
     tags: (tagRows ?? []).map((row) => row.tag),
     payments: paymentRows ?? [],
     attachments
