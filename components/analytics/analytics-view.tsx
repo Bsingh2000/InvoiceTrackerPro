@@ -75,6 +75,9 @@ const responsiveChartProps = {
   minHeight: 288
 };
 
+const chartAxisWidth = 76;
+const chartMargin = { left: 8, right: 12, top: 10, bottom: 0 };
+
 const statusColors: Record<string, string> = {
   Draft: "#939086",
   Pending: "#17accb",
@@ -543,7 +546,7 @@ function TrendChart({
         <ResponsiveContainer width="100%" height="100%" {...responsiveChartProps}>
           <BarChart
             data={data}
-            margin={{ left: 0, right: 8, top: 10, bottom: 0 }}
+            margin={chartMargin}
             onClick={(event) => {
               const row = getChartClickPayload(event);
               if (row) {
@@ -552,8 +555,15 @@ function TrendChart({
             }}
           >
             <CartesianGrid stroke="#ececea" vertical={false} />
-            <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fill: "#59564f" }} />
-            <YAxis tickFormatter={(value) => formatAxisValue(Number(value), unit)} tickLine={false} axisLine={false} width={58} tick={{ fill: "#59564f" }} />
+            <XAxis dataKey="month" tickLine={false} axisLine={false} tickMargin={8} tick={{ fill: "#59564f" }} />
+            <YAxis
+              tickFormatter={(value) => formatAxisValue(Number(value), unit)}
+              tickLine={false}
+              axisLine={false}
+              width={chartAxisWidth}
+              tickMargin={10}
+              tick={{ fill: "#59564f" }}
+            />
             <Tooltip content={<AnalyticsTooltip unit={unit} definition={basis === "cash" ? "Cash basis: amount paid on completed invoices." : "Invoice basis: amount recorded by invoice date."} />} />
             <Legend iconType="circle" wrapperStyle={{ paddingTop: 10, fontSize: 12, fontWeight: 700 }} />
             <Bar dataKey="receivables" fill="#0a876b" radius={[6, 6, 0, 0]} />
@@ -575,7 +585,7 @@ function ExposureChart({ data, onPointClick }: { data: ChartRow[]; onPointClick:
         <ResponsiveContainer width="100%" height="100%" {...responsiveChartProps}>
           <LineChart
             data={data}
-            margin={{ left: 0, right: 8, top: 10, bottom: 0 }}
+            margin={chartMargin}
             onClick={(event) => {
               const row = getChartClickPayload(event);
               if (row) {
@@ -584,8 +594,15 @@ function ExposureChart({ data, onPointClick }: { data: ChartRow[]; onPointClick:
             }}
           >
             <CartesianGrid stroke="#ececea" vertical={false} />
-            <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fill: "#59564f" }} />
-            <YAxis tickFormatter={(value) => formatCompactCurrency(Number(value))} tickLine={false} axisLine={false} width={58} tick={{ fill: "#59564f" }} />
+            <XAxis dataKey="month" tickLine={false} axisLine={false} tickMargin={8} tick={{ fill: "#59564f" }} />
+            <YAxis
+              tickFormatter={(value) => formatCompactCurrency(Number(value))}
+              tickLine={false}
+              axisLine={false}
+              width={chartAxisWidth}
+              tickMargin={10}
+              tick={{ fill: "#59564f" }}
+            />
             <Tooltip content={<AnalyticsTooltip unit="amount" definition="Open balance by invoice due month." />} />
             <Legend iconType="circle" wrapperStyle={{ paddingTop: 10, fontSize: 12, fontWeight: 700 }} />
             <Line type="linear" dataKey="openReceivables" stroke="#0a876b" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />

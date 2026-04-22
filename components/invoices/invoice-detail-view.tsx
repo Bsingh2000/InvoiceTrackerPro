@@ -25,6 +25,7 @@ import { Card, SectionCard } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
+import { getAppTodayString } from "@/lib/date-utils";
 import {
   describeDueDate,
   formatCurrency,
@@ -46,6 +47,7 @@ import type {
   Invoice,
   InvoiceInput,
   InvoicePayment,
+  InvoicePaymentInput,
   InvoicePriority,
   InvoiceStatus
 } from "@/lib/types";
@@ -63,6 +65,14 @@ const statuses: InvoiceStatus[] = [
 
 const priorities: InvoicePriority[] = ["Low", "Medium", "High", "Critical"];
 
+type PartialPaymentDraft = {
+  amount: string;
+  paymentDate: string;
+  paymentMethod: string;
+  referenceNumber: string;
+  notes: string;
+};
+
 export function InvoiceDetailView({ id }: { id: string }) {
   const router = useRouter();
   const {
@@ -77,7 +87,11 @@ export function InvoiceDetailView({ id }: { id: string }) {
   const { notify } = useToast();
   const invoice = invoices.find((item) => item.id === id);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [partialAmount, setPartialAmount] = useState("");
+  const [partialPaymentOpen, setPartialPaymentOpen] = useState(false);
+  const [partialPaymentDraft, setPartialPaymentDraft] = useState<PartialPaymentDraft>(() =>
+    createPartialPaymentDraft(invoice)
+  );
+  const [partialPaymentSaving, setPartialPaymentSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [status, setStatus] = useState<InvoiceStatus>(invoice?.status ?? "Pending");
@@ -87,8 +101,12 @@ export function InvoiceDetailView({ id }: { id: string }) {
     if (invoice) {
       setStatus(invoice.status);
       setPriority(invoice.priority);
+
+      if (!partialPaymentOpen) {
+        setPartialPaymentDraft(createPartialPaymentDraft(invoice));
+      }
     }
-  }, [invoice]);
+  }, [invoice, partialPaymentOpen]);
 
   const activity = useMemo(() => buildActivity(id, invoice), [id, invoice]);
 
@@ -154,12 +172,10 @@ export function InvoiceDetailView({ id }: { id: string }) {
     }
   }
 
-  async function handlePartialPayment() {
+  function openPartialPaymentDialog() {
     if (!invoice) {
       return;
     }
-
-    const amount = Number(partialAmount);
 
     if (!canReceivePayment(invoice)) {
       notify({
@@ -169,6 +185,25 @@ export function InvoiceDetailView({ id }: { id: string }) {
       });
       return;
     }
+
+    setPartialPaymentDraft(createPartialPaymentDraft(invoice));
+    setPartialPaymentOpen(true);
+  }
+
+  function closePartialPaymentDialog() {
+    setPartialPaymentOpen(false);
+
+    if (invoice) {
+      setPartialPaymentDraft(createPartialPaymentDraft(invoice));
+    }
+  }
+
+  async function handlePartialPayment() {
+    if (!invoice) {
+      return;
+    }
+
+    const amount = Number(partialPaymentDraft.amount);
 
     if (!amount || amount <= 0) {
       notify({
@@ -188,9 +223,28 @@ export function InvoiceDetailView({ id }: { id: string }) {
       return;
     }
 
+    if (!partialPaymentDraft.paymentDate) {
+      notify({
+        title: "Payment date required",
+        description: "Select the date this payment was received.",
+        variant: "warning"
+      });
+      return;
+    }
+
+    setPartialPaymentSaving(true);
+
     try {
-      await recordPartialPayment(invoice.id, amount);
-      setPartialAmount("");
+      const paymentInput: InvoicePaymentInput = {
+        amount,
+        paymentDate: partialPaymentDraft.paymentDate,
+        paymentMethod: partialPaymentDraft.paymentMethod,
+        referenceNumber: partialPaymentDraft.referenceNumber,
+        notes: partialPaymentDraft.notes
+      };
+
+      await recordPartialPayment(invoice.id, paymentInput);
+      closePartialPaymentDialog();
       notify({
         title: "Payment recorded",
         description: `${formatCurrency(amount, invoice.currency)} was applied to ${invoice.invoiceNumber}.`,
@@ -198,6 +252,8 @@ export function InvoiceDetailView({ id }: { id: string }) {
       });
     } catch (error) {
       notifyMutationError("Payment could not be recorded", error);
+    } finally {
+      setPartialPaymentSaving(false);
     }
   }
 
@@ -469,12 +525,8 @@ export function InvoiceDetailView({ id }: { id: string }) {
             <QuickActionsCard
               canPay={canPay}
               isClosed={isClosed}
-              balance={balance}
-              partialAmount={partialAmount}
-              partialInputId="partial-payment-mobile"
-              onPartialAmountChange={setPartialAmount}
               onMarkPaid={handleMarkPaid}
-              onPartialPayment={handlePartialPayment}
+              onOpenPartialPaymentDialog={openPartialPaymentDialog}
               onReminder={sendReminder}
               onDuplicate={duplicateInvoice}
               onExport={exportInvoice}
@@ -553,12 +605,8 @@ export function InvoiceDetailView({ id }: { id: string }) {
             <QuickActionsCard
               canPay={canPay}
               isClosed={isClosed}
-              balance={balance}
-              partialAmount={partialAmount}
-              partialInputId="partial-payment"
-              onPartialAmountChange={setPartialAmount}
               onMarkPaid={handleMarkPaid}
-              onPartialPayment={handlePartialPayment}
+              onOpenPartialPaymentDialog={openPartialPaymentDialog}
               onReminder={sendReminder}
               onDuplicate={duplicateInvoice}
               onExport={exportInvoice}
@@ -606,6 +654,21 @@ export function InvoiceDetailView({ id }: { id: string }) {
         onCancel={() => setConfirmOpen(false)}
         onConfirm={handleDelete}
       />
+      <PartialPaymentDialog
+        open={partialPaymentOpen}
+        invoice={invoice}
+        balance={balance}
+        draft={partialPaymentDraft}
+        submitting={partialPaymentSaving}
+        onChange={(field, value) =>
+          setPartialPaymentDraft((current) => ({
+            ...current,
+            [field]: value
+          }))
+        }
+        onCancel={closePartialPaymentDialog}
+        onSubmit={handlePartialPayment}
+      />
     </>
   );
 }
@@ -613,12 +676,8 @@ export function InvoiceDetailView({ id }: { id: string }) {
 function QuickActionsCard({
   canPay,
   isClosed,
-  balance,
-  partialAmount,
-  partialInputId,
-  onPartialAmountChange,
   onMarkPaid,
-  onPartialPayment,
+  onOpenPartialPaymentDialog,
   onReminder,
   onDuplicate,
   onExport,
@@ -629,12 +688,8 @@ function QuickActionsCard({
 }: {
   canPay: boolean;
   isClosed: boolean;
-  balance: number;
-  partialAmount: string;
-  partialInputId: string;
-  onPartialAmountChange: (value: string) => void;
   onMarkPaid: () => void;
-  onPartialPayment: () => void;
+  onOpenPartialPaymentDialog: () => void;
   onReminder: () => void;
   onDuplicate: () => void;
   onExport: () => void | Promise<void>;
@@ -655,25 +710,9 @@ function QuickActionsCard({
               <CheckCircle2 className="size-4" />
               Mark as paid
             </Button>
-            <div className="grid gap-2">
-              <label className="field-label" htmlFor={partialInputId}>
-                Partial payment
-              </label>
-              <input
-                id={partialInputId}
-                type="number"
-                min="0"
-                max={balance}
-                step="0.01"
-                value={partialAmount}
-                onChange={(event) => onPartialAmountChange(event.target.value)}
-                className="field-control mt-0"
-                placeholder="0.00"
-              />
-              <Button variant="secondary" onClick={onPartialPayment}>
-                Record partial payment
-              </Button>
-            </div>
+            <Button variant="secondary" onClick={onOpenPartialPaymentDialog}>
+              Record partial payment
+            </Button>
             <Button variant="secondary" onClick={onReminder}>
               <Send className="size-4" />
               Send reminder
@@ -708,6 +747,142 @@ function QuickActionsCard({
         </Button>
       </div>
     </Card>
+  );
+}
+
+function PartialPaymentDialog({
+  open,
+  invoice,
+  balance,
+  draft,
+  submitting,
+  onChange,
+  onCancel,
+  onSubmit
+}: {
+  open: boolean;
+  invoice: Invoice;
+  balance: number;
+  draft: PartialPaymentDraft;
+  submitting: boolean;
+  onChange: (field: keyof PartialPaymentDraft, value: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void | Promise<void>;
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/45 px-4 py-6 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="partial-payment-title"
+        className="w-full max-w-xl rounded-lg border border-ink-200 bg-white p-5 shadow-luxury"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
+              Payment entry
+            </p>
+            <h2 id="partial-payment-title" className="mt-2 text-2xl font-black text-ink-900">
+              Record partial payment
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-ink-600">
+              Apply a payment to {invoice.invoiceNumber} and save the transaction details for the audit trail.
+            </p>
+          </div>
+          <div className="rounded-lg border border-ink-100 bg-ink-50 px-3 py-2 text-right">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-ink-500">
+              Remaining balance
+            </p>
+            <p className="mt-1 text-lg font-black text-ink-900">
+              {formatCurrency(balance, invoice.currency)}
+            </p>
+          </div>
+        </div>
+
+        <form
+          className="mt-6 grid gap-4 sm:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSubmit();
+          }}
+        >
+          <label>
+            <span className="field-label">Amount</span>
+            <input
+              className="field-control"
+              type="number"
+              min="0"
+              max={balance}
+              step="0.01"
+              value={draft.amount}
+              onChange={(event) => onChange("amount", event.target.value)}
+              placeholder="0.00"
+              required
+            />
+          </label>
+
+          <label>
+            <span className="field-label">Payment date</span>
+            <input
+              className="field-control"
+              type="date"
+              value={draft.paymentDate}
+              onChange={(event) => onChange("paymentDate", event.target.value)}
+              required
+            />
+          </label>
+
+          <label>
+            <span className="field-label">Payment method</span>
+            <input
+              className="field-control"
+              value={draft.paymentMethod}
+              onChange={(event) => onChange("paymentMethod", event.target.value)}
+              placeholder="Bank transfer"
+            />
+          </label>
+
+          <label>
+            <span className="field-label">Reference number</span>
+            <input
+              className="field-control"
+              value={draft.referenceNumber}
+              onChange={(event) => onChange("referenceNumber", event.target.value)}
+              placeholder="Receipt or transfer reference"
+            />
+          </label>
+
+          <label className="sm:col-span-2">
+            <span className="field-label">Notes</span>
+            <textarea
+              className="field-control min-h-24 resize-y"
+              value={draft.notes}
+              onChange={(event) => onChange("notes", event.target.value)}
+              placeholder="Add an internal note for this payment if needed."
+            />
+          </label>
+
+          <div className="sm:col-span-2 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onCancel}
+              disabled={submitting}
+              className="sm:min-w-32"
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting} className="sm:min-w-32">
+              {submitting ? "Recording payment..." : "Save payment"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -784,6 +959,16 @@ function getDownloadFilename(contentDisposition: string | null, fallback: string
 
   const match = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
   return match?.[1] || fallback;
+}
+
+function createPartialPaymentDraft(invoice?: Invoice) {
+  return {
+    amount: "",
+    paymentDate: getAppTodayString(),
+    paymentMethod: invoice?.paymentMethod ?? "",
+    referenceNumber: "",
+    notes: ""
+  };
 }
 
 function TextBlock({ title, value, empty }: { title: string; value?: string; empty: string }) {

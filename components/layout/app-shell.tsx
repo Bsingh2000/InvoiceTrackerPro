@@ -43,8 +43,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div
               className={
                 sidebarCollapsed
-                  ? "fixed inset-y-0 left-0 z-30 hidden w-20 lg:block"
-                  : "fixed inset-y-0 left-0 z-30 hidden w-[17rem] lg:block"
+                  ? "fixed inset-y-0 left-0 z-30 hidden w-[5.5rem] lg:block"
+                  : "fixed inset-y-0 left-0 z-30 hidden w-[18rem] lg:block"
               }
             >
               <Sidebar
@@ -62,8 +62,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <main
               className={
                 sidebarCollapsed
-                  ? "min-h-screen pt-16 lg:pl-20 lg:pt-0"
-                  : "min-h-screen pt-16 lg:pl-[17rem] lg:pt-0"
+                  ? "min-h-screen pt-16 lg:pl-[5.5rem] lg:pt-0"
+                  : "min-h-screen pt-16 lg:pl-[18rem] lg:pt-0"
               }
             >
               <div className="mx-auto w-full max-w-[1600px] px-4 pb-[calc(env(safe-area-inset-bottom)+8rem)] pt-5 sm:px-6 lg:px-8 lg:pb-10 lg:pt-7">

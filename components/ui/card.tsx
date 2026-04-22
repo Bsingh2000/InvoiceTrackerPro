@@ -29,16 +29,16 @@ export function SectionCard({
 }) {
   return (
     <Card className={cn("overflow-hidden", className)}>
-      <div className="flex flex-col gap-3 border-b border-ink-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <div>
+      <div className="flex flex-col gap-4 border-b border-ink-100 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
+        <div className="min-w-0 flex-1">
           {eyebrow ? (
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
+            <p className="break-words text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
               {eyebrow}
             </p>
           ) : null}
-          <h2 className="mt-1 text-lg font-semibold text-ink-900">{title}</h2>
+          <h2 className="mt-1 break-words text-lg font-semibold leading-7 text-ink-900">{title}</h2>
         </div>
-        {action}
+        {action ? <div className="shrink-0 self-start sm:self-center">{action}</div> : null}
       </div>
       <div className="p-4 sm:p-5">{children}</div>
     </Card>

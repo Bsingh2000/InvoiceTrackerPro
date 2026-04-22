@@ -19,6 +19,7 @@ import type {
   Invoice,
   InvoiceInput,
   InvoicePayment,
+  InvoicePaymentInput,
   InvoicePriority,
   InvoiceStatus,
   InvoiceType
@@ -37,7 +38,7 @@ type InvoiceContextValue = {
   updateInvoice: (id: string, patch: Partial<Invoice>) => Promise<void>;
   deleteInvoice: (id: string) => Promise<void>;
   markAsPaid: (id: string) => Promise<void>;
-  recordPartialPayment: (id: string, amount: number) => Promise<void>;
+  recordPartialPayment: (id: string, payment: InvoicePaymentInput) => Promise<void>;
   resetDemoData: () => Promise<void>;
   refreshInvoices: () => Promise<void>;
 };
@@ -320,7 +321,19 @@ export function InvoiceProvider({ children }: { children: ReactNode }) {
       await insertTags(row.id, input.tags);
 
       if (input.amountPaid > 0) {
-        await insertPayment(row.id, input.amountPaid, input.currency, input.paymentMethod, supabase, workspace.id, user.id);
+        await insertPayment(
+          row.id,
+          {
+            amount: input.amountPaid,
+            paymentDate: getAppTodayString(),
+            paymentMethod: input.paymentMethod
+          },
+          input.currency,
+          input.paymentMethod,
+          supabase,
+          workspace.id,
+          user.id
+        );
       }
 
       if (options?.attachmentFile) {
@@ -412,7 +425,19 @@ export function InvoiceProvider({ children }: { children: ReactNode }) {
       }
 
       if (paymentAmount > 0) {
-        await insertPayment(id, paymentAmount, invoice.currency, invoice.paymentMethod, supabase, workspace.id, user.id);
+        await insertPayment(
+          id,
+          {
+            amount: paymentAmount,
+            paymentDate: getAppTodayString(),
+            paymentMethod: invoice.paymentMethod
+          },
+          invoice.currency,
+          invoice.paymentMethod,
+          supabase,
+          workspace.id,
+          user.id
+        );
       }
 
       await refreshInvoices();
@@ -421,12 +446,13 @@ export function InvoiceProvider({ children }: { children: ReactNode }) {
   );
 
   const recordPartialPayment = useCallback(
-    async (id: string, amount: number) => {
+    async (id: string, payment: InvoicePaymentInput) => {
       const invoice = invoices.find((item) => item.id === id);
       if (!invoice) {
         return;
       }
 
+      const amount = Math.min(payment.amount, invoice.balanceRemaining);
       const amountPaid = Math.min(invoice.amount, invoice.amountPaid + amount);
       const { error: updateError } = await supabase
         .from("invoices")
@@ -441,7 +467,18 @@ export function InvoiceProvider({ children }: { children: ReactNode }) {
         throw updateError;
       }
 
-      await insertPayment(id, Math.min(amount, invoice.balanceRemaining), invoice.currency, invoice.paymentMethod, supabase, workspace.id, user.id);
+      await insertPayment(
+        id,
+        {
+          ...payment,
+          amount
+        },
+        invoice.currency,
+        invoice.paymentMethod,
+        supabase,
+        workspace.id,
+        user.id
+      );
       await refreshInvoices();
     },
     [invoices, refreshInvoices, supabase, user.id, workspace.id]
@@ -685,24 +722,26 @@ function toInvoiceUpdate(patch: Partial<Invoice>) {
 
 async function insertPayment(
   invoiceId: string,
-  amount: number,
+  payment: InvoicePaymentInput,
   currency: CurrencyCode,
-  paymentMethod: string | undefined,
+  fallbackPaymentMethod: string | undefined,
   supabase: ReturnType<typeof createClient>,
   workspaceId: string,
   userId: string
 ) {
-  if (amount <= 0) {
+  if (payment.amount <= 0) {
     return;
   }
 
   const { error } = await supabase.from("invoice_payments").insert({
     workspace_id: workspaceId,
     invoice_id: invoiceId,
-    amount,
+    amount: payment.amount,
     currency,
-    payment_date: getAppTodayString(),
-    payment_method: paymentMethod ?? null,
+    payment_date: payment.paymentDate,
+    payment_method: payment.paymentMethod?.trim() || fallbackPaymentMethod || null,
+    reference_number: payment.referenceNumber?.trim() || null,
+    notes: payment.notes?.trim() || null,
     created_by: userId
   });
 

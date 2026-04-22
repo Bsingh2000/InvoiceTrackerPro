@@ -30,6 +30,7 @@ import type {
   MonthEndSummary,
   RenderedMonthEndEmail
 } from "@/lib/email/types";
+import { createClient } from "@/lib/supabase/client";
 import type { CurrencyCode, Invoice, InvoicePriority, InvoiceStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -113,6 +114,44 @@ type InviteUserResponse = {
   error?: string;
 };
 
+type WorkspaceSettingsRow = {
+  workspace_id: string;
+  business_name: string;
+  finance_email: string;
+  base_currency: CurrencyCode;
+  reporting_currency: CurrencyCode;
+  supported_currencies: CurrencyCode[];
+  allow_multi_currency: boolean;
+  normalize_reports: boolean;
+  default_payment_terms: string;
+  time_zone: string;
+  date_format: string;
+  invoice_prefix: string;
+  default_status: InvoiceStatus;
+  default_priority: InvoicePriority;
+  default_reminder_lead_days: number;
+  default_payment_method: string;
+  default_category: string;
+  due_today_alerts: boolean;
+  due_tomorrow_alerts: boolean;
+  overdue_alerts: boolean;
+  large_value_alerts: boolean;
+  reminder_lead_days: number;
+  overdue_escalation_days: number;
+  ttd_large_threshold: number | string;
+  usd_large_threshold: number | string;
+  collect_reminder_tone: string;
+  pay_reminder_tone: string;
+  default_export_format: string;
+  include_notes_in_export: boolean;
+  include_dismissed_alerts: boolean;
+  export_currency_behavior: string;
+  export_date_format: string;
+  number_format: string;
+  save_filters_by_page: boolean;
+  restore_last_view: boolean;
+};
+
 const defaultSettings: WorkspaceSettings = {
   businessName: "Sterling Ledger Studio",
   financeEmail: "finance@example.com",
@@ -151,6 +190,7 @@ const defaultSettings: WorkspaceSettings = {
 };
 
 export function SettingsView() {
+  const supabase = useMemo(() => createClient(), []);
   const { workspace } = useAuth();
   const { invoices, resetDemoData } = useInvoices();
   const { notify } = useToast();
@@ -168,23 +208,89 @@ export function SettingsView() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const canManageUsers = workspace.role === "owner" || workspace.role === "admin";
+  const canManageWorkspaceSettings = workspace.role === "owner" || workspace.role === "admin";
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored) {
+    let active = true;
+
+    async function loadSettings() {
+      const stored = readStoredWorkspaceSettings();
+      const localSettings = stored ? normalizeSettings(stored) : null;
+      const localHasCustomSettings =
+        localSettings && !areSettingsEqual(localSettings, defaultSettings);
+
       try {
-        const next = normalizeSettings(JSON.parse(stored) as Partial<WorkspaceSettings>);
+        const { data, error } = await supabase
+          .from("workspace_settings")
+          .select(
+            "workspace_id, business_name, finance_email, base_currency, reporting_currency, supported_currencies, allow_multi_currency, normalize_reports, default_payment_terms, time_zone, date_format, invoice_prefix, default_status, default_priority, default_reminder_lead_days, default_payment_method, default_category, due_today_alerts, due_tomorrow_alerts, overdue_alerts, large_value_alerts, reminder_lead_days, overdue_escalation_days, ttd_large_threshold, usd_large_threshold, collect_reminder_tone, pay_reminder_tone, default_export_format, include_notes_in_export, include_dismissed_alerts, export_currency_behavior, export_date_format, number_format, save_filters_by_page, restore_last_view"
+          )
+          .eq("workspace_id", workspace.id)
+          .maybeSingle<WorkspaceSettingsRow>();
+
+        if (error) {
+          throw error;
+        }
+
+        let next =
+          data ? normalizeSettings(fromWorkspaceSettingsRow(data)) : localSettings ?? defaultSettings;
+        const databaseSettings = data ? normalizeSettings(fromWorkspaceSettingsRow(data)) : null;
+        const shouldMigrateLocalSettings =
+          Boolean(localHasCustomSettings) &&
+          canManageWorkspaceSettings &&
+          (!databaseSettings || areSettingsEqual(databaseSettings, defaultSettings));
+
+        if (shouldMigrateLocalSettings && localSettings) {
+          const { error: saveError } = await supabase
+            .from("workspace_settings")
+            .upsert(toWorkspaceSettingsRow(localSettings, workspace.id));
+
+          if (saveError) {
+            throw saveError;
+          }
+
+          next = localSettings;
+        }
+
+        if (!active) {
+          return;
+        }
+
         setSettings(next);
         setSavedSettings(next);
         setEmailRecipients(next.financeEmail);
-      } catch {
-        window.localStorage.removeItem(STORAGE_KEY);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        const fallback = localSettings ?? defaultSettings;
+        setSettings(fallback);
+        setSavedSettings(fallback);
+        setEmailRecipients(fallback.financeEmail);
+        notify({
+          title: "Settings sync unavailable",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Workspace settings could not be loaded from Supabase.",
+          variant: "warning"
+        });
+      } finally {
+        if (active) {
+          setHydrated(true);
+        }
       }
     }
 
-    setHydrated(true);
-  }, []);
+    void loadSettings();
+
+    return () => {
+      active = false;
+    };
+  }, [canManageWorkspaceSettings, notify, supabase, workspace.id]);
 
   const dirty = useMemo(
     () => JSON.stringify(settings) !== JSON.stringify(savedSettings),
@@ -309,16 +415,39 @@ export function SettingsView() {
     }
   }
 
-  function saveChanges() {
+  async function saveChanges() {
     const next = normalizeSettings(settings);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    setSettings(next);
-    setSavedSettings(next);
-    notify({
-      title: "Settings saved",
-      description: "Workspace defaults, alert rules, and export preferences were updated.",
-      variant: "success"
-    });
+    setSettingsSaving(true);
+
+    try {
+      const { error } = await supabase
+        .from("workspace_settings")
+        .upsert(toWorkspaceSettingsRow(next, workspace.id));
+
+      if (error) {
+        throw error;
+      }
+
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      setSettings(next);
+      setSavedSettings(next);
+      notify({
+        title: "Settings saved",
+        description: "Workspace defaults, alert rules, and export preferences were updated.",
+        variant: "success"
+      });
+    } catch (error) {
+      notify({
+        title: "Settings could not be saved",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Workspace settings could not be saved to Supabase.",
+        variant: "warning"
+      });
+    } finally {
+      setSettingsSaving(false);
+    }
   }
 
   function resetChanges() {
@@ -454,9 +583,9 @@ export function SettingsView() {
       <Button variant="secondary" onClick={resetChanges} disabled={!dirty}>
         Reset changes
       </Button>
-      <Button onClick={saveChanges} disabled={!dirty || !hydrated}>
+      <Button onClick={() => void saveChanges()} disabled={!dirty || !hydrated || settingsSaving}>
         <Save className="size-4" />
-        Save changes
+        {settingsSaving ? "Saving..." : "Save changes"}
       </Button>
     </>
   );
@@ -1520,7 +1649,7 @@ function AdvancedTools({ onDemoReset }: { onDemoReset: () => void }) {
               Persistence status
             </p>
             <p className="mt-2 text-sm leading-6 text-ink-600">
-              Invoices are stored in Supabase for the active workspace. Settings and alert view preferences still use this browser.
+              Invoices and workspace defaults are stored in Supabase for the active workspace. Alert workflow state still uses this browser.
             </p>
           </div>
           <div className="rounded-lg border border-garnet-100 bg-garnet-50/40 p-4">
@@ -1761,4 +1890,102 @@ function sortCurrencies(values: CurrencyCode[]) {
 
 function isCurrencyCode(value: unknown): value is CurrencyCode {
   return currencies.includes(value as CurrencyCode);
+}
+
+function readStoredWorkspaceSettings() {
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+
+  if (!stored) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(stored) as Partial<WorkspaceSettings>;
+  } catch {
+    window.localStorage.removeItem(STORAGE_KEY);
+    return null;
+  }
+}
+
+function fromWorkspaceSettingsRow(row: WorkspaceSettingsRow): WorkspaceSettings {
+  return {
+    businessName: row.business_name,
+    financeEmail: row.finance_email,
+    baseCurrency: row.base_currency,
+    reportingCurrency: row.reporting_currency,
+    supportedCurrencies: row.supported_currencies,
+    allowMultiCurrency: row.allow_multi_currency,
+    normalizeReports: row.normalize_reports,
+    defaultPaymentTerms: row.default_payment_terms,
+    timeZone: row.time_zone,
+    dateFormat: row.date_format,
+    invoicePrefix: row.invoice_prefix,
+    defaultStatus: row.default_status,
+    defaultPriority: row.default_priority,
+    defaultReminderLeadDays: Number(row.default_reminder_lead_days),
+    defaultPaymentMethod: row.default_payment_method,
+    defaultCategory: row.default_category,
+    dueTodayAlerts: row.due_today_alerts,
+    dueTomorrowAlerts: row.due_tomorrow_alerts,
+    overdueAlerts: row.overdue_alerts,
+    largeValueAlerts: row.large_value_alerts,
+    reminderLeadDays: Number(row.reminder_lead_days),
+    overdueEscalationDays: Number(row.overdue_escalation_days),
+    ttdLargeThreshold: Number(row.ttd_large_threshold),
+    usdLargeThreshold: Number(row.usd_large_threshold),
+    collectReminderTone: row.collect_reminder_tone,
+    payReminderTone: row.pay_reminder_tone,
+    defaultExportFormat: row.default_export_format,
+    includeNotesInExport: row.include_notes_in_export,
+    includeDismissedAlerts: row.include_dismissed_alerts,
+    exportCurrencyBehavior: row.export_currency_behavior,
+    exportDateFormat: row.export_date_format,
+    numberFormat: row.number_format,
+    saveFiltersByPage: row.save_filters_by_page,
+    restoreLastView: row.restore_last_view
+  };
+}
+
+function toWorkspaceSettingsRow(settings: WorkspaceSettings, workspaceId: string): WorkspaceSettingsRow {
+  return {
+    workspace_id: workspaceId,
+    business_name: settings.businessName,
+    finance_email: settings.financeEmail,
+    base_currency: settings.baseCurrency,
+    reporting_currency: settings.reportingCurrency,
+    supported_currencies: settings.supportedCurrencies,
+    allow_multi_currency: settings.allowMultiCurrency,
+    normalize_reports: settings.normalizeReports,
+    default_payment_terms: settings.defaultPaymentTerms,
+    time_zone: settings.timeZone,
+    date_format: settings.dateFormat,
+    invoice_prefix: settings.invoicePrefix,
+    default_status: settings.defaultStatus,
+    default_priority: settings.defaultPriority,
+    default_reminder_lead_days: settings.defaultReminderLeadDays,
+    default_payment_method: settings.defaultPaymentMethod,
+    default_category: settings.defaultCategory,
+    due_today_alerts: settings.dueTodayAlerts,
+    due_tomorrow_alerts: settings.dueTomorrowAlerts,
+    overdue_alerts: settings.overdueAlerts,
+    large_value_alerts: settings.largeValueAlerts,
+    reminder_lead_days: settings.reminderLeadDays,
+    overdue_escalation_days: settings.overdueEscalationDays,
+    ttd_large_threshold: settings.ttdLargeThreshold,
+    usd_large_threshold: settings.usdLargeThreshold,
+    collect_reminder_tone: settings.collectReminderTone,
+    pay_reminder_tone: settings.payReminderTone,
+    default_export_format: settings.defaultExportFormat,
+    include_notes_in_export: settings.includeNotesInExport,
+    include_dismissed_alerts: settings.includeDismissedAlerts,
+    export_currency_behavior: settings.exportCurrencyBehavior,
+    export_date_format: settings.exportDateFormat,
+    number_format: settings.numberFormat,
+    save_filters_by_page: settings.saveFiltersByPage,
+    restore_last_view: settings.restoreLastView
+  };
+}
+
+function areSettingsEqual(left: WorkspaceSettings, right: WorkspaceSettings) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
