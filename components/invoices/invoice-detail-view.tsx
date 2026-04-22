@@ -79,6 +79,7 @@ export function InvoiceDetailView({ id }: { id: string }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [partialAmount, setPartialAmount] = useState("");
   const [editing, setEditing] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [status, setStatus] = useState<InvoiceStatus>(invoice?.status ?? "Pending");
   const [priority, setPriority] = useState<InvoicePriority>(invoice?.priority ?? "Medium");
 
@@ -298,25 +299,43 @@ export function InvoiceDetailView({ id }: { id: string }) {
     }
   }
 
-  function exportInvoice() {
+  async function exportInvoice() {
     if (!invoice) {
       return;
     }
 
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(invoice, null, 2)], { type: "application/json;charset=utf-8;" })
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${invoice.invoiceNumber}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    setExporting(true);
 
-    notify({
-      title: "Invoice export ready",
-      description: `${invoice.invoiceNumber} was downloaded as JSON.`,
-      variant: "success"
-    });
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/export`);
+
+      if (!response.ok) {
+        const errorMessage = await readExportError(response);
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const fileName = getDownloadFilename(
+        response.headers.get("content-disposition"),
+        `${invoice.invoiceNumber}-export.zip`
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      notify({
+        title: "Export ready",
+        description: `${invoice.invoiceNumber} was downloaded as a ZIP package.`,
+        variant: "success"
+      });
+    } catch (error) {
+      notifyMutationError("Invoice export could not be prepared", error);
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function reopenInvoice() {
@@ -459,6 +478,7 @@ export function InvoiceDetailView({ id }: { id: string }) {
               onReminder={sendReminder}
               onDuplicate={duplicateInvoice}
               onExport={exportInvoice}
+              exporting={exporting}
               onReopen={reopenInvoice}
               onEdit={() => setEditing((current) => !current)}
               onArchive={() => setConfirmOpen(true)}
@@ -542,6 +562,7 @@ export function InvoiceDetailView({ id }: { id: string }) {
               onReminder={sendReminder}
               onDuplicate={duplicateInvoice}
               onExport={exportInvoice}
+              exporting={exporting}
               onReopen={reopenInvoice}
               onEdit={() => setEditing((current) => !current)}
               onArchive={() => setConfirmOpen(true)}
@@ -601,6 +622,7 @@ function QuickActionsCard({
   onReminder,
   onDuplicate,
   onExport,
+  exporting,
   onReopen,
   onEdit,
   onArchive
@@ -615,7 +637,8 @@ function QuickActionsCard({
   onPartialPayment: () => void;
   onReminder: () => void;
   onDuplicate: () => void;
-  onExport: () => void;
+  onExport: () => void | Promise<void>;
+  exporting: boolean;
   onReopen: () => void;
   onEdit: () => void;
   onArchive: () => void;
@@ -664,9 +687,9 @@ function QuickActionsCard({
               <Copy className="size-4" />
               Duplicate invoice
             </Button>
-            <Button variant="secondary" onClick={onExport}>
+            <Button variant="secondary" onClick={() => void onExport()} disabled={exporting}>
               <Download className="size-4" />
-              Download / Export
+              {exporting ? "Preparing export..." : "Download / Export"}
             </Button>
             <Button variant="secondary" onClick={onReopen}>
               <RefreshCcw className="size-4" />
@@ -740,6 +763,27 @@ function AttachmentLink({ invoiceId, fileName }: { invoiceId: string; fileName?:
       <Download className="size-3.5 shrink-0" />
     </a>
   );
+}
+
+async function readExportError(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    const body = (await response.json()) as { error?: string };
+    return body.error || "Invoice export failed.";
+  }
+
+  const text = await response.text();
+  return text || "Invoice export failed.";
+}
+
+function getDownloadFilename(contentDisposition: string | null, fallback: string) {
+  if (!contentDisposition) {
+    return fallback;
+  }
+
+  const match = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+  return match?.[1] || fallback;
 }
 
 function TextBlock({ title, value, empty }: { title: string; value?: string; empty: string }) {
