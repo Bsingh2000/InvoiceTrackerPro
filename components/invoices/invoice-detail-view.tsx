@@ -340,7 +340,13 @@ export function InvoiceDetailView({ id }: { id: string }) {
       tags: invoice.tags,
       referenceNumber: invoice.referenceNumber,
       recurring: invoice.recurring,
-      attachmentName: invoice.attachmentName
+      attachmentName: invoice.attachmentName,
+      lineItems: invoice.lineItems.map((item, index) => ({
+        description: item.description,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        sortOrder: item.sortOrder ?? index
+      }))
     };
     try {
       const created = await addInvoice(input);
@@ -571,6 +577,10 @@ export function InvoiceDetailView({ id }: { id: string }) {
               </dl>
             </SectionCard>
           </section>
+
+          <SectionCard title="Line items" eyebrow="Billing">
+            <LineItemsTable invoice={invoice} />
+          </SectionCard>
 
           <SectionCard title="Notes and tags" eyebrow="Context">
             <div className="grid gap-5 xl:grid-cols-2">
@@ -912,11 +922,75 @@ function FinancialMetric({
   );
 }
 
+function LineItemsTable({ invoice }: { invoice: Invoice }) {
+  if (!invoice.lineItems.length) {
+    return (
+      <p className="rounded-lg border border-ink-100 bg-ink-50/70 p-4 text-sm font-semibold text-ink-500">
+        No line items were recorded for this invoice.
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-ink-100">
+      <div className="hidden grid-cols-[minmax(0,1.7fr)_110px_140px_140px] gap-4 border-b border-ink-100 bg-ink-50/70 px-4 py-3 text-xs font-bold uppercase tracking-[0.12em] text-ink-500 sm:grid">
+        <span>Description</span>
+        <span>Qty</span>
+        <span>Unit price</span>
+        <span className="text-right">Total</span>
+      </div>
+
+      <div className="divide-y divide-ink-100">
+        {invoice.lineItems.map((item, index) => (
+          <div
+            key={item.id}
+            className="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1.7fr)_110px_140px_140px] sm:items-center"
+          >
+            <div>
+              <p className="text-sm font-bold text-ink-900">{item.description}</p>
+              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-ink-400 sm:hidden">
+                Item {index + 1}
+              </p>
+            </div>
+            <DetailValue label="Qty" value={formatQuantity(item.quantity)} />
+            <DetailValue label="Unit price" value={formatCurrency(item.unitPrice, invoice.currency)} />
+            <DetailValue
+              label="Total"
+              value={formatCurrency(item.lineTotal, invoice.currency)}
+              align="right"
+              strong
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DetailItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-ink-100 pb-3 last:border-0 last:pb-0">
       <dt className="text-ink-500">{label}</dt>
       <dd className="max-w-[60%] text-right font-semibold text-ink-900">{value}</dd>
+    </div>
+  );
+}
+
+function DetailValue({
+  label,
+  value,
+  align = "left",
+  strong = false
+}: {
+  label: string;
+  value: string;
+  align?: "left" | "right";
+  strong?: boolean;
+}) {
+  return (
+    <div className={cn("sm:block", align === "right" && "sm:text-right")}>
+      <p className="text-xs font-bold uppercase tracking-[0.12em] text-ink-400 sm:hidden">{label}</p>
+      <p className={cn("text-sm text-ink-700", strong && "font-black text-ink-900")}>{value}</p>
     </div>
   );
 }
@@ -969,6 +1043,10 @@ function createPartialPaymentDraft(invoice?: Invoice) {
     referenceNumber: "",
     notes: ""
   };
+}
+
+function formatQuantity(quantity: number) {
+  return Number.isInteger(quantity) ? String(quantity) : String(quantity);
 }
 
 function TextBlock({ title, value, empty }: { title: string; value?: string; empty: string }) {

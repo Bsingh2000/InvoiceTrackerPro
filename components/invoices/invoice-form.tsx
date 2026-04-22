@@ -17,7 +17,7 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from "react";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm, useWatch } from "react-hook-form";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { useInvoices } from "@/components/providers/invoice-provider";
@@ -31,7 +31,7 @@ import {
   getAppTodayString
 } from "@/lib/date-utils";
 import { currencies, formatCurrency, percentage } from "@/lib/format";
-import type { InvoiceInput, InvoiceStatus, InvoiceType } from "@/lib/types";
+import type { InvoiceInput, InvoiceLineItemInput, InvoiceStatus, InvoiceType } from "@/lib/types";
 import { invoiceFormSchema, type InvoiceFormInput, type InvoiceFormValues } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 
@@ -51,7 +51,7 @@ type PaymentTerm = (typeof paymentTerms)[number]["value"];
 export function InvoiceForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { invoices, addInvoice } = useInvoices();
+  const { invoices, addInvoice, getNextInvoiceNumber } = useInvoices();
   const { notify } = useToast();
   const defaultType: InvoiceType = searchParams.get("type") === "payable" ? "payable" : "receivable";
   const [paymentTerm, setPaymentTerm] = useState<PaymentTerm>("30");
@@ -61,12 +61,10 @@ export function InvoiceForm() {
   const [saved, setSaved] = useState(false);
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
 
-  const initialInvoiceNumber = useMemo(
-    () => makeInvoiceNumber(defaultType, invoices),
-    [defaultType, invoices]
-  );
+  const initialInvoiceNumber = useMemo(() => makeFallbackInvoiceNumber(defaultType), [defaultType]);
 
   const {
+    control,
     register,
     handleSubmit,
     watch,
@@ -78,12 +76,22 @@ export function InvoiceForm() {
     defaultValues: makeDefaultValues(defaultType, initialInvoiceNumber)
   });
 
+  const { fields: lineItemFields, append: appendLineItem, remove: removeLineItem } = useFieldArray({
+    control,
+    name: "lineItems"
+  });
+
+  const watchedLineItems = useWatch({
+    control,
+    name: "lineItems"
+  });
+  const lineItems = useMemo(() => watchedLineItems ?? [], [watchedLineItems]);
   const invoiceType = watch("type");
   const invoiceNumber = watch("invoiceNumber");
   const partyName = watch("partyName");
   const invoiceDate = watch("invoiceDate");
   const dueDate = watch("dueDate");
-  const amount = Number(watch("amount") || 0);
+  const amount = useMemo(() => calculateInvoiceTotal(lineItems), [lineItems]);
   const currency = watch("currency");
   const status = watch("status");
   const amountPaidInput = Number(watch("amountPaid") || 0);
@@ -96,6 +104,18 @@ export function InvoiceForm() {
   const balance = Math.max(0, amount - paidAmount);
   const parties = useMemo(() => getKnownParties(invoices, invoiceType), [invoices, invoiceType]);
   const tags = useMemo(() => parseTags(tagsValue), [tagsValue]);
+  const lineItemsComplete = useMemo(
+    () =>
+      lineItems.length > 0 &&
+      amount > 0 &&
+      lineItems.every(
+        (item) =>
+          String(item?.description ?? "").trim().length >= 2 &&
+          Number(item?.quantity) > 0 &&
+          Number(item?.unitPrice) >= 0
+      ),
+    [amount, lineItems]
+  );
   const warnings = useMemo(
     () => getWarnings({ amount, amountPaid: amountPaidInput, invoiceDate, dueDate, reminderDate, status }),
     [amount, amountPaidInput, dueDate, invoiceDate, reminderDate, status]
@@ -103,7 +123,7 @@ export function InvoiceForm() {
   const checklist = [
     { label: "Type selected", complete: Boolean(invoiceType) },
     { label: `${invoiceType === "receivable" ? "Customer" : "Vendor"} entered`, complete: partyName.trim().length >= 2 },
-    { label: "Amount entered", complete: amount > 0 },
+    { label: "Line items added", complete: lineItemsComplete },
     { label: "Dates completed", complete: Boolean(invoiceDate && dueDate) && compareDateOnly(dueDate, invoiceDate) >= 0 },
     { label: "Status selected", complete: Boolean(status) }
   ];
@@ -141,9 +161,29 @@ export function InvoiceForm() {
 
   useEffect(() => {
     if (!invoiceNumberEdited) {
-      setValue("invoiceNumber", makeInvoiceNumber(invoiceType, invoices), { shouldDirty: false });
+      let cancelled = false;
+
+      void getNextInvoiceNumber(invoiceType)
+        .then((nextInvoiceNumber) => {
+          if (!cancelled) {
+            setValue("invoiceNumber", nextInvoiceNumber, { shouldDirty: false });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setValue("invoiceNumber", makeFallbackInvoiceNumber(invoiceType), { shouldDirty: false });
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [invoiceNumberEdited, invoiceType, invoices, setValue]);
+  }, [getNextInvoiceNumber, invoiceNumberEdited, invoiceType, setValue]);
+
+  useEffect(() => {
+    setValue("amount", amount, { shouldDirty: false, shouldValidate: true });
+  }, [amount, setValue]);
 
   useEffect(() => {
     if (status !== "Partially Paid" && amountPaidInput !== 0) {
@@ -165,7 +205,6 @@ export function InvoiceForm() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isDirty, saved]);
 
-  const amountRegister = register("amount", { setValueAs: parseCurrencyInput });
   const partialRegister = register("amountPaid", { setValueAs: parseCurrencyInput });
   const dueDateRegister = register("dueDate");
 
@@ -174,7 +213,10 @@ export function InvoiceForm() {
     const invoiceInput = toInvoiceInput(values, intent);
 
     try {
-      const created = await addInvoice(invoiceInput, { attachmentFile });
+      const created = await addInvoice(invoiceInput, {
+        attachmentFile,
+        allowInvoiceNumberRetry: !invoiceNumberEdited
+      });
       setSaved(true);
 
       notify({
@@ -185,10 +227,13 @@ export function InvoiceForm() {
 
       if (intent === "another") {
         const nextType = values.type;
+        const nextInvoiceNumber = await getNextInvoiceNumber(nextType).catch(() =>
+          makeFallbackInvoiceNumber(nextType)
+        );
         setInvoiceNumberEdited(false);
         setTagDraft("");
         setAttachmentFile(null);
-        reset(makeDefaultValues(nextType, makeInvoiceNumber(nextType, [created, ...invoices])));
+        reset(makeDefaultValues(nextType, nextInvoiceNumber));
         setPaymentTerm("30");
         window.setTimeout(() => setSaved(false), 0);
         return;
@@ -198,7 +243,7 @@ export function InvoiceForm() {
     } catch (error) {
       notify({
         title: "Invoice could not be saved",
-        description: error instanceof Error ? error.message : "Supabase rejected the invoice save request.",
+        description: getErrorMessage(error, "Supabase rejected the invoice save request."),
         variant: "warning"
       });
     }
@@ -206,11 +251,13 @@ export function InvoiceForm() {
 
   function toInvoiceInput(values: InvoiceFormValues, intent: SubmitIntent): InvoiceInput {
     const nextStatus = intent === "draft" ? "Draft" : values.status;
+    const normalizedLineItems = normalizeLineItems(values.lineItems);
+    const totalAmount = calculateInvoiceTotal(normalizedLineItems);
     const normalizedPaid =
       nextStatus === "Paid"
-        ? values.amount
+        ? totalAmount
         : nextStatus === "Partially Paid"
-          ? Math.min(values.amount, values.amountPaid)
+          ? Math.min(totalAmount, values.amountPaid)
           : 0;
 
     return {
@@ -220,7 +267,7 @@ export function InvoiceForm() {
       contact: values.contact || undefined,
       invoiceDate: values.invoiceDate,
       dueDate: values.dueDate,
-      amount: values.amount,
+      amount: totalAmount,
       currency: values.currency,
       status: nextStatus,
       paymentMethod: values.paymentMethod || undefined,
@@ -233,7 +280,8 @@ export function InvoiceForm() {
       recurring: values.recurring,
       reminderDate: values.reminderDate || undefined,
       tags: parseTags(values.tags || ""),
-      attachmentName: values.attachmentName || undefined
+      attachmentName: values.attachmentName || undefined,
+      lineItems: normalizedLineItems
     };
   }
 
@@ -363,20 +411,6 @@ export function InvoiceForm() {
                 />
               </Field>
 
-              <Field label="Amount" required error={errors.amount?.message} className="lg:col-span-3">
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black text-ink-500">
-                    {currency}
-                  </span>
-                  <input
-                    inputMode="decimal"
-                    className="field-control pl-14 text-lg font-black"
-                    placeholder="0.00"
-                    {...amountRegister}
-                  />
-                </div>
-              </Field>
-
               <Field label="Currency" required error={errors.currency?.message} className="lg:col-span-3">
                 <select className="field-control" {...register("currency")}>
                   {currencies.map((item) => (
@@ -433,6 +467,141 @@ export function InvoiceForm() {
                   Complete these required fields and use {typeCopy.create.toLowerCase()} from the action rail.
                 </p>
               </div>
+
+              <FieldBlock
+                label="Line items"
+                required
+                error={
+                  typeof errors.lineItems?.message === "string"
+                    ? errors.lineItems.message
+                    : errors.amount?.message
+                }
+                className="lg:col-span-6"
+                helper="Build the invoice from individual charges so the total stays clean and auditable."
+              >
+                <input type="hidden" {...register("amount", { setValueAs: parseCurrencyInput })} />
+
+                <div className="mt-2 overflow-hidden rounded-lg border border-ink-200 bg-white">
+                  <div className="hidden grid-cols-[minmax(0,1.7fr)_100px_140px_140px_auto] gap-3 border-b border-ink-100 bg-ink-50/70 px-3 py-3 text-xs font-bold uppercase tracking-[0.12em] text-ink-500 sm:grid">
+                    <span>Description</span>
+                    <span>Qty</span>
+                    <span>Unit price</span>
+                    <span>Line total</span>
+                    <span className="text-right">Action</span>
+                  </div>
+
+                  <div className="space-y-3 p-3">
+                    {lineItemFields.map((field, index) => {
+                      const descriptionError =
+                        typeof errors.lineItems?.[index]?.description?.message === "string"
+                          ? errors.lineItems[index]?.description?.message
+                          : undefined;
+                      const quantityError =
+                        typeof errors.lineItems?.[index]?.quantity?.message === "string"
+                          ? errors.lineItems[index]?.quantity?.message
+                          : undefined;
+                      const unitPriceError =
+                        typeof errors.lineItems?.[index]?.unitPrice?.message === "string"
+                          ? errors.lineItems[index]?.unitPrice?.message
+                          : undefined;
+                      const lineTotal = calculateLineItemTotal(lineItems[index]);
+
+                      return (
+                        <div
+                          key={field.id}
+                          className="grid gap-3 rounded-lg border border-ink-100 bg-ink-50/35 p-3 sm:grid-cols-[minmax(0,1.7fr)_100px_140px_140px_auto] sm:items-start"
+                        >
+                          <div>
+                            <label className="sm:hidden">
+                              <span className="field-label text-ink-600">Description</span>
+                            </label>
+                            <input
+                              className="field-control mt-0"
+                              placeholder="Service, milestone, or billable item"
+                              {...register(`lineItems.${index}.description` as const)}
+                            />
+                            {descriptionError ? <p className="field-error">{descriptionError}</p> : null}
+                          </div>
+
+                          <div>
+                            <label className="sm:hidden">
+                              <span className="field-label text-ink-600">Quantity</span>
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className="field-control mt-0"
+                              {...register(`lineItems.${index}.quantity` as const, {
+                                setValueAs: parseNumericInput
+                              })}
+                            />
+                            {quantityError ? <p className="field-error">{quantityError}</p> : null}
+                          </div>
+
+                          <div>
+                            <label className="sm:hidden">
+                              <span className="field-label text-ink-600">Unit price</span>
+                            </label>
+                            <div className="relative">
+                              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black text-ink-500">
+                                {currency}
+                              </span>
+                              <input
+                                inputMode="decimal"
+                                className="field-control mt-0 pl-14"
+                                placeholder="0.00"
+                                {...register(`lineItems.${index}.unitPrice` as const, {
+                                  setValueAs: parseCurrencyInput
+                                })}
+                              />
+                            </div>
+                            {unitPriceError ? <p className="field-error">{unitPriceError}</p> : null}
+                          </div>
+
+                          <div>
+                            <p className="field-label text-ink-600 sm:hidden">Line total</p>
+                            <div className="mt-2 rounded-lg border border-ink-200 bg-white px-3 py-3 text-sm font-black text-ink-900 sm:mt-0">
+                              {formatCurrency(lineTotal, currency)}
+                            </div>
+                          </div>
+
+                          <div className="flex items-start justify-end sm:pt-0.5">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="min-w-0"
+                              onClick={() => removeLineItem(index)}
+                              disabled={lineItemFields.length === 1}
+                            >
+                              <X className="size-4" />
+                              <span className="sm:hidden">Remove</span>
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-col gap-3 border-t border-ink-100 bg-white px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => appendLineItem(makeDefaultLineItem(lineItemFields.length))}
+                    >
+                      <Plus className="size-4" />
+                      Add line item
+                    </Button>
+
+                    <div className="rounded-lg border border-ink-200 bg-ink-50/70 px-4 py-3 text-right">
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-500">Invoice total</p>
+                      <p className="mt-1 text-lg font-black text-ink-900">{formatCurrency(amount, currency)}</p>
+                    </div>
+                  </div>
+                </div>
+              </FieldBlock>
             </div>
           </SectionCard>
 
@@ -642,9 +811,9 @@ export function InvoiceForm() {
               </div>
             ) : (
               <div className="mt-4 rounded-lg border border-ink-100 bg-ink-50/70 p-4">
-                <p className="text-sm font-bold text-ink-900">Enter amount to preview balance</p>
+                <p className="text-sm font-bold text-ink-900">Add line items to preview balance</p>
                 <p className="mt-1 text-sm leading-6 text-ink-600">
-                  The summary will show total, paid amount, remaining balance, and payment progress.
+                  The summary will show the computed total, paid amount, remaining balance, and payment progress.
                 </p>
               </div>
             )}
@@ -652,6 +821,7 @@ export function InvoiceForm() {
             <div className="mt-4 grid gap-3 text-sm">
               <SummaryRow label={typeCopy.party} value={partyName || "Not entered"} />
               <SummaryRow label="Invoice number" value={invoiceNumber || "Not set"} />
+              <SummaryRow label="Line items" value={`${lineItems.length}`} />
               <SummaryRow label="Due date" value={dueDate || "Not set"} />
               <SummaryRow label="Status" value={statusLabel(status, invoiceType)} />
             </div>
@@ -750,7 +920,8 @@ function makeDefaultValues(type: InvoiceType, invoiceNumber: string): InvoiceFor
     recurrenceFrequency: "Monthly",
     recurrenceStart: today,
     recurrenceEnd: "",
-    recurrenceInterval: 1
+    recurrenceInterval: 1,
+    lineItems: [makeDefaultLineItem()]
   };
 }
 
@@ -924,10 +1095,9 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function makeInvoiceNumber(type: InvoiceType, invoices: Array<{ type: InvoiceType }>) {
+function makeFallbackInvoiceNumber(type: InvoiceType) {
   const prefix = type === "receivable" ? "REC" : "PAY";
-  const count = invoices.filter((invoice) => invoice.type === type).length + 1;
-  return `${prefix}-${today.slice(0, 4)}-${String(count).padStart(3, "0")}`;
+  return `${prefix}-${today.slice(0, 4)}-001`;
 }
 
 function getKnownParties(invoices: Array<{ type: InvoiceType; partyName: string }>, type: InvoiceType) {
@@ -942,6 +1112,10 @@ function getKnownParties(invoices: Array<{ type: InvoiceType; partyName: string 
 }
 
 function parseCurrencyInput(value: unknown) {
+  return parseNumericInput(value);
+}
+
+function parseNumericInput(value: unknown) {
   if (typeof value === "number") {
     return value;
   }
@@ -955,6 +1129,43 @@ function parseTags(value: string) {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+function makeDefaultLineItem(sortOrder = 0): InvoiceFormInput["lineItems"][number] {
+  return {
+    description: "",
+    quantity: 1,
+    unitPrice: 0,
+    sortOrder
+  };
+}
+
+function normalizeLineItems(
+  items: Array<{
+    description: string;
+    quantity: unknown;
+    unitPrice: unknown;
+    sortOrder?: unknown;
+  }>
+): InvoiceLineItemInput[] {
+  return items.map((item, index) => ({
+    description: item.description.trim(),
+    quantity: Number(item.quantity),
+    unitPrice: Number(item.unitPrice),
+    sortOrder: Number(item.sortOrder ?? index)
+  }));
+}
+
+function calculateInvoiceTotal(items: Array<{ quantity: unknown; unitPrice: unknown }>) {
+  return Number(
+    items
+      .reduce((total, item) => total + calculateLineItemTotal(item), 0)
+      .toFixed(2)
+  );
+}
+
+function calculateLineItemTotal(item?: { quantity: unknown; unitPrice: unknown }) {
+  return Number(((Number(item?.quantity) || 0) * (Number(item?.unitPrice) || 0)).toFixed(2));
 }
 
 function getPreviewPaidAmount(status: InvoiceStatus, amount: number, amountPaid: number) {
@@ -985,6 +1196,10 @@ function getWarnings({
   status: InvoiceStatus;
 }) {
   const warnings: string[] = [];
+
+  if (amount <= 0) {
+    warnings.push("Add at least one line item with a positive total.");
+  }
 
   if (invoiceDate && dueDate && compareDateOnly(dueDate, invoiceDate) < 0) {
     warnings.push("Due date is earlier than the invoice date.");
@@ -1018,6 +1233,27 @@ function buildInternalRemarks(values: InvoiceFormValues) {
     .join("; ");
 
   return remarks ? `${remarks}\n${recurrence}` : recurrence;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const message = "message" in error ? error.message : undefined;
+    const details = "details" in error ? error.details : undefined;
+    const hint = "hint" in error ? error.hint : undefined;
+    const parts = [message, details, hint].filter(
+      (part): part is string => typeof part === "string" && part.trim().length > 0
+    );
+
+    if (parts.length) {
+      return parts.join(" ");
+    }
+  }
+
+  return fallback;
 }
 
 function statusLabel(status: InvoiceStatus, type: InvoiceType) {

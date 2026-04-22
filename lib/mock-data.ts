@@ -11,13 +11,30 @@ function monthsAgo(months: number, dayOffset = 0) {
   return addDaysToDateOnly(addMonthsToDateOnly(demoToday, -months), dayOffset);
 }
 
-function invoice(input: Omit<Invoice, "balanceRemaining" | "createdAt" | "updatedAt">): Invoice {
+function invoice(
+  input: Omit<Invoice, "balanceRemaining" | "createdAt" | "updatedAt" | "lineItems"> & {
+    lineItems?: Invoice["lineItems"];
+  }
+): Invoice {
   const balanceRemaining = Math.max(0, input.amount - input.amountPaid);
   const createdAt = `${input.invoiceDate}T09:30:00.000Z`;
   const updatedAt = `${input.invoiceDate}T16:45:00.000Z`;
 
   return {
     ...input,
+    lineItems:
+      input.lineItems ??
+      [
+        {
+          id: `${input.id}-item-1`,
+          invoiceId: input.id,
+          description: input.category || "Invoice total",
+          quantity: 1,
+          unitPrice: input.amount,
+          lineTotal: input.amount,
+          sortOrder: 0
+        }
+      ],
     balanceRemaining,
     createdAt,
     updatedAt

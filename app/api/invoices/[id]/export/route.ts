@@ -40,6 +40,15 @@ type PaymentRow = {
   created_at: string;
 };
 
+type LineItemRow = {
+  id: string;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+  sort_order: number;
+};
+
 type AttachmentRow = {
   bucket: string;
   storage_path: string;
@@ -105,6 +114,7 @@ export async function GET(
   const [
     { data: workspace, error: workspaceError },
     { data: workspaceSettings, error: workspaceSettingsError },
+    { data: lineItemRows, error: lineItemError },
     { data: paymentRows, error: paymentError },
     { data: attachmentRows, error: attachmentError },
     { data: tagRows, error: tagError }
@@ -119,6 +129,13 @@ export async function GET(
       .select("business_name, finance_email, default_payment_terms")
       .eq("workspace_id", invoice.workspace_id)
       .maybeSingle<WorkspaceSettingsRow>(),
+    supabase
+      .from("invoice_line_items")
+      .select("id, description, quantity, unit_price, line_total, sort_order")
+      .eq("invoice_id", invoice.id)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true })
+      .returns<LineItemRow[]>(),
     supabase
       .from("invoice_payments")
       .select("id, amount, currency, payment_date, payment_method, reference_number, notes, created_at")
@@ -141,12 +158,13 @@ export async function GET(
       .returns<TagRow[]>()
   ]);
 
-  if (workspaceError || workspaceSettingsError || paymentError || attachmentError || tagError) {
+  if (workspaceError || workspaceSettingsError || lineItemError || paymentError || attachmentError || tagError) {
     return NextResponse.json(
       {
         error:
           workspaceError?.message ||
           workspaceSettingsError?.message ||
+          lineItemError?.message ||
           paymentError?.message ||
           attachmentError?.message ||
           tagError?.message ||
@@ -188,6 +206,7 @@ export async function GET(
       defaultPaymentTerms: workspaceSettings?.default_payment_terms ?? null
     },
     tags: (tagRows ?? []).map((row) => row.tag),
+    lineItems: lineItemRows ?? [],
     payments: paymentRows ?? [],
     attachments
   });

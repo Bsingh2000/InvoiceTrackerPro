@@ -48,6 +48,15 @@ type ExportPayment = {
   created_at: string;
 };
 
+type ExportLineItem = {
+  id: string;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+  sort_order: number;
+};
+
 type ExportAttachment = {
   fileName: string;
   contentType: string | null;
@@ -58,6 +67,7 @@ export type InvoiceExportPayload = {
   invoice: ExportInvoice;
   workspace: ExportWorkspace;
   tags: string[];
+  lineItems: ExportLineItem[];
   payments: ExportPayment[];
   attachments: ExportAttachment[];
 };
@@ -743,13 +753,19 @@ function buildMetaFields(payload: InvoiceExportPayload) {
 function buildSummaryRows(payload: InvoiceExportPayload) {
   const invoice = payload.invoice;
   const balance = Math.max(0, Number(invoice.balance_remaining));
-  const rows = [
-    {
-      description: invoice.type === "receivable" ? "Receivable invoice" : "Payable invoice",
-      details: buildPrimaryDetail(invoice),
-      amount: formatCurrency(Number(invoice.amount), invoice.currency)
-    }
-  ];
+  const rows = payload.lineItems.length
+    ? payload.lineItems.map((item) => ({
+        description: item.description,
+        details: `${formatQuantity(item.quantity)} x ${formatCurrency(item.unit_price, invoice.currency)}`,
+        amount: formatCurrency(item.line_total, invoice.currency)
+      }))
+    : [
+        {
+          description: invoice.type === "receivable" ? "Receivable invoice" : "Payable invoice",
+          details: buildPrimaryDetail(invoice),
+          amount: formatCurrency(Number(invoice.amount), invoice.currency)
+        }
+      ];
 
   if (Number(invoice.amount_paid) > 0) {
     rows.push({
@@ -776,6 +792,10 @@ function buildPrimaryDetail(invoice: ExportInvoice) {
   }
 
   return detailParts.join(" | ");
+}
+
+function formatQuantity(quantity: number) {
+  return Number.isInteger(quantity) ? String(quantity) : quantity.toFixed(2).replace(/\.?0+$/, "");
 }
 
 function getCompanyName(workspace: ExportWorkspace) {

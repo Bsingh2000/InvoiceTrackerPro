@@ -13,6 +13,23 @@ export type InvoicePriority = "Low" | "Medium" | "High" | "Critical";
 
 export type CurrencyCode = "TTD" | "USD" | "EUR" | "GBP" | "CAD" | "BOB";
 
+export type InvoiceLineItem = {
+  id: string;
+  invoiceId: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  sortOrder: number;
+};
+
+export type InvoiceLineItemInput = {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  sortOrder?: number;
+};
+
 export type Invoice = {
   id: string;
   invoiceNumber: string;
@@ -38,6 +55,7 @@ export type Invoice = {
   referenceNumber?: string;
   recurring: boolean;
   attachmentName?: string;
+  lineItems: InvoiceLineItem[];
 };
 
 export type InvoicePayment = {
@@ -62,8 +80,10 @@ export type InvoicePaymentInput = {
 
 export type InvoiceInput = Omit<
   Invoice,
-  "id" | "createdAt" | "updatedAt" | "balanceRemaining"
->;
+  "id" | "createdAt" | "updatedAt" | "balanceRemaining" | "lineItems"
+> & {
+  lineItems: InvoiceLineItemInput[];
+};
 
 export type ActivityEvent = {
   id: string;
