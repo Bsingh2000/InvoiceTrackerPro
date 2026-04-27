@@ -4,14 +4,17 @@ import {
   BellRing,
   Building2,
   ChevronDown,
+  Copy,
   Database,
   FileDown,
   Globe2,
+  KeyRound,
   Mail,
   RotateCcw,
   Save,
   Send,
   ShieldCheck,
+  Trash2,
   UserPlus,
   Users,
   WalletCards
@@ -110,8 +113,77 @@ type WorkspaceUsersResponse = {
 
 type InviteUserResponse = {
   invited?: boolean;
+  deliveryMethod?: "email_invite" | "temporary_password";
+  ownershipTransferred?: boolean;
+  temporaryPassword?: string;
+  passwordResetRequired?: boolean;
+  replacedExistingPassword?: boolean;
   user?: WorkspaceUser;
   error?: string;
+};
+
+type DeleteWorkspaceUserResponse = {
+  removed?: boolean;
+  accountDeleted?: boolean;
+  authDeletionWarning?: string | null;
+  user?: WorkspaceUser;
+  error?: string;
+};
+
+type MonthEndAutomationRun = {
+  id: string;
+  runType: "manual_preview" | "manual_send" | "auto_check" | "auto_send";
+  status: "success" | "skipped" | "failed";
+  reason: string | null;
+  recipientEmail: string | null;
+  snapshotMonth: string | null;
+  snapshotDate: string | null;
+  timeZone: string | null;
+  providerMessageId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+type MonthEndAutomationOverview = {
+  enabled: boolean;
+  scheduleUtc: string;
+  workspaceId: string;
+  workspaceName: string;
+  ownerEmail: string;
+  timeZone: string;
+  todayLocalDate: string;
+  nextMonthEndDate: string;
+  lastCheck: MonthEndAutomationRun | null;
+  lastSuccessfulAutoSend: MonthEndAutomationRun | null;
+  lastSuccessfulManualSend: MonthEndAutomationRun | null;
+  recentRuns: MonthEndAutomationRun[];
+};
+
+type MonthEndAutomationOverviewResponse = {
+  ok?: boolean;
+  enabled?: boolean;
+  scheduleUtc?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  ownerEmail?: string;
+  timeZone?: string;
+  todayLocalDate?: string;
+  nextMonthEndDate?: string;
+  lastCheck?: MonthEndAutomationRun | null;
+  lastSuccessfulAutoSend?: MonthEndAutomationRun | null;
+  lastSuccessfulManualSend?: MonthEndAutomationRun | null;
+  recentRuns?: MonthEndAutomationRun[];
+  error?: string;
+};
+
+type ProvisionMethod = "email_invite" | "temporary_password";
+
+type TemporaryPasswordResult = {
+  fullName: string;
+  email: string;
+  role: string;
+  temporaryPassword: string;
+  replacedExistingPassword: boolean;
 };
 
 type WorkspaceSettingsRow = {
@@ -191,26 +263,42 @@ const defaultSettings: WorkspaceSettings = {
 
 export function SettingsView() {
   const supabase = useMemo(() => createClient(), []);
-  const { workspace } = useAuth();
+  const { workspace, user } = useAuth();
   const { invoices, resetDemoData } = useInvoices();
   const { notify } = useToast();
   const [settings, setSettings] = useState<WorkspaceSettings>(defaultSettings);
   const [savedSettings, setSavedSettings] = useState<WorkspaceSettings>(defaultSettings);
   const [hydrated, setHydrated] = useState(false);
-  const [emailRecipients, setEmailRecipients] = useState(defaultSettings.financeEmail);
   const [emailPreview, setEmailPreview] = useState<EmailPreviewState>(null);
   const [emailToolMessage, setEmailToolMessage] = useState<EmailToolMessage | null>(null);
   const [emailLoading, setEmailLoading] = useState<"preview" | "send" | null>(null);
   const [lastEmailAttempt, setLastEmailAttempt] = useState<string | null>(null);
+  const [automationOverview, setAutomationOverview] = useState<MonthEndAutomationOverview | null>(null);
+  const [automationLoading, setAutomationLoading] = useState(false);
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [inviteFullName, setInviteFullName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
-  const [inviteLoading, setInviteLoading] = useState(false);
+  const [userProvisionLoading, setUserProvisionLoading] = useState<ProvisionMethod | null>(null);
+  const [temporaryPasswordResult, setTemporaryPasswordResult] = useState<TemporaryPasswordResult | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const canManageUsers = workspace.role === "owner" || workspace.role === "admin";
   const canManageWorkspaceSettings = workspace.role === "owner" || workspace.role === "admin";
+  const ownerEmail = useMemo(() => {
+    const ownerUser = workspaceUsers.find((workspaceUser) => workspaceUser.role === "owner");
+
+    if (ownerUser?.email) {
+      return ownerUser.email;
+    }
+
+    if (workspace.role === "owner" && user.email) {
+      return user.email;
+    }
+
+    return "";
+  }, [user.email, workspace.role, workspaceUsers]);
 
   useEffect(() => {
     let active = true;
@@ -260,7 +348,6 @@ export function SettingsView() {
 
         setSettings(next);
         setSavedSettings(next);
-        setEmailRecipients(next.financeEmail);
       } catch (error) {
         if (!active) {
           return;
@@ -269,7 +356,6 @@ export function SettingsView() {
         const fallback = localSettings ?? defaultSettings;
         setSettings(fallback);
         setSavedSettings(fallback);
-        setEmailRecipients(fallback.financeEmail);
         notify({
           title: "Settings sync unavailable",
           description:
@@ -363,6 +449,54 @@ export function SettingsView() {
     }
   }, [notify]);
 
+  const loadMonthEndAutomationOverview = useCallback(async () => {
+    if (!canManageWorkspaceSettings) {
+      setAutomationOverview(null);
+      return;
+    }
+
+    setAutomationLoading(true);
+
+    try {
+      const response = await fetch("/api/internal/email/month-end-automation-status", {
+        headers: {
+          "X-Requested-With": "invoice-tracker-settings"
+        }
+      });
+      const data = (await response.json()) as MonthEndAutomationOverviewResponse;
+
+      if (!response.ok || data.error || !data.workspaceId || !data.scheduleUtc || !data.timeZone || !data.todayLocalDate || !data.nextMonthEndDate) {
+        throw new Error(data.error || "Month-end automation status could not be loaded.");
+      }
+
+      setAutomationOverview({
+        enabled: Boolean(data.enabled),
+        scheduleUtc: data.scheduleUtc,
+        workspaceId: data.workspaceId,
+        workspaceName: data.workspaceName ?? "",
+        ownerEmail: data.ownerEmail ?? "",
+        timeZone: data.timeZone,
+        todayLocalDate: data.todayLocalDate,
+        nextMonthEndDate: data.nextMonthEndDate,
+        lastCheck: data.lastCheck ?? null,
+        lastSuccessfulAutoSend: data.lastSuccessfulAutoSend ?? null,
+        lastSuccessfulManualSend: data.lastSuccessfulManualSend ?? null,
+        recentRuns: data.recentRuns ?? []
+      });
+    } catch (error) {
+      notify({
+        title: "Automation status unavailable",
+        description:
+          error instanceof Error
+            ? error.message
+            : "The month-end automation overview could not be loaded.",
+        variant: "warning"
+      });
+    } finally {
+      setAutomationLoading(false);
+    }
+  }, [canManageWorkspaceSettings, notify]);
+
   useEffect(() => {
     if (!canManageUsers) {
       return;
@@ -371,8 +505,16 @@ export function SettingsView() {
     void loadWorkspaceUsers();
   }, [canManageUsers, loadWorkspaceUsers]);
 
-  async function inviteWorkspaceUser() {
-    setInviteLoading(true);
+  useEffect(() => {
+    if (!canManageWorkspaceSettings) {
+      return;
+    }
+
+    void loadMonthEndAutomationOverview();
+  }, [canManageWorkspaceSettings, loadMonthEndAutomationOverview]);
+
+  async function provisionWorkspaceUser(deliveryMethod: ProvisionMethod) {
+    setUserProvisionLoading(deliveryMethod);
 
     try {
       const response = await fetch("/api/workspace/users", {
@@ -384,34 +526,149 @@ export function SettingsView() {
         body: JSON.stringify({
           fullName: inviteFullName,
           email: inviteEmail,
-          role: inviteRole
+          role: inviteRole,
+          deliveryMethod
         })
       });
       const data = (await response.json()) as InviteUserResponse;
 
       if (!response.ok || data.error) {
-        throw new Error(data.error || "Invite could not be sent.");
+        throw new Error(
+          data.error ||
+            (deliveryMethod === "temporary_password"
+              ? "Temporary password could not be generated."
+              : "Invite could not be sent.")
+        );
       }
 
       setInviteFullName("");
       setInviteEmail("");
       setInviteRole("member");
       await loadWorkspaceUsers();
+
+      if (deliveryMethod === "temporary_password" && data.temporaryPassword) {
+        setTemporaryPasswordResult({
+          fullName: data.user?.fullName ?? inviteFullName,
+          email: data.user?.email ?? inviteEmail,
+          role: data.user?.role ?? inviteRole,
+          temporaryPassword: data.temporaryPassword,
+          replacedExistingPassword: Boolean(data.replacedExistingPassword)
+        });
+        notify({
+          title: data.ownershipTransferred ? "Ownership transferred" : "Temporary password ready",
+          description: data.ownershipTransferred
+            ? `${data.user?.email ?? inviteEmail} is now the workspace owner. Share the password securely; your session role will reload.`
+            : `${data.user?.email ?? inviteEmail} must change this password on first sign-in.`,
+          variant: "success"
+        });
+        if (data.ownershipTransferred) {
+          window.setTimeout(() => window.location.reload(), 900);
+        }
+        return;
+      }
+
+      setTemporaryPasswordResult(null);
       notify({
-        title: data.invited ? "Invite sent" : "User added",
-        description: data.invited
-          ? `${data.user?.email ?? inviteEmail} was emailed a secure setup link.`
-          : `${data.user?.email ?? inviteEmail} already has an account and can sign in.`,
+        title: data.ownershipTransferred
+          ? "Ownership transferred"
+          : data.invited
+            ? "Invite sent"
+            : "User added",
+        description: data.ownershipTransferred
+          ? `${data.user?.email ?? inviteEmail} is now the workspace owner. Reloading your session role.`
+          : data.invited
+            ? `${data.user?.email ?? inviteEmail} was emailed a secure setup link.`
+            : `${data.user?.email ?? inviteEmail} already has an account and can sign in.`,
+        variant: "success"
+      });
+
+      if (data.ownershipTransferred) {
+        window.setTimeout(() => window.location.reload(), 700);
+      }
+    } catch (error) {
+      notify({
+        title: deliveryMethod === "temporary_password" ? "Temporary password failed" : "Invite failed",
+        description:
+          error instanceof Error
+            ? error.message
+            : deliveryMethod === "temporary_password"
+              ? "The temporary password could not be generated."
+              : "The user could not be invited.",
+        variant: "warning"
+      });
+    } finally {
+      setUserProvisionLoading(null);
+    }
+  }
+
+  async function copyTemporaryPassword() {
+    if (!temporaryPasswordResult) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(temporaryPasswordResult.temporaryPassword);
+      notify({
+        title: "Temporary password copied",
+        description: "Share it securely with the user. It is only shown here once.",
+        variant: "success"
+      });
+    } catch {
+      notify({
+        title: "Copy failed",
+        description: "Copy the temporary password manually from the settings panel.",
+        variant: "warning"
+      });
+    }
+  }
+
+  async function deleteWorkspaceUser(target: WorkspaceUser) {
+    if (
+      !window.confirm(
+        `Delete ${target.fullName || target.email || "this user"} from the workspace?`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingUserId(target.id);
+
+    try {
+      const response = await fetch("/api/workspace/users", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "invoice-tracker-settings"
+        },
+        body: JSON.stringify({
+          userId: target.id
+        })
+      });
+      const data = (await response.json()) as DeleteWorkspaceUserResponse;
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "The user could not be deleted.");
+      }
+
+      setWorkspaceUsers((current) => current.filter((item) => item.id !== target.id));
+
+      notify({
+        title: data.accountDeleted ? "User deleted" : "Workspace access removed",
+        description: data.accountDeleted
+          ? `${target.email || "The user"} was deleted from the system.`
+          : data.authDeletionWarning
+            ? `${target.email || "The user"} lost workspace access, but the auth account was kept: ${data.authDeletionWarning}`
+            : `${target.email || "The user"} can no longer access this workspace.`,
         variant: "success"
       });
     } catch (error) {
       notify({
-        title: "Invite failed",
-        description: error instanceof Error ? error.message : "The user could not be invited.",
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "The user could not be deleted.",
         variant: "warning"
       });
     } finally {
-      setInviteLoading(false);
+      setDeletingUserId(null);
     }
   }
 
@@ -524,23 +781,24 @@ export function SettingsView() {
         description: error instanceof Error ? error.message : "The preview could not be generated."
       });
     } finally {
+      if (canManageWorkspaceSettings) {
+        void loadMonthEndAutomationOverview();
+      }
       setEmailLoading(null);
     }
   }
 
   async function sendMonthEndTestEmail() {
-    const recipientResult = parseRecipients(emailRecipients);
-
-    if (recipientResult.error) {
+    if (!ownerEmail) {
       setEmailToolMessage({
         tone: "warning",
-        title: "Recipient needed",
-        description: recipientResult.error
+        title: "Owner email missing",
+        description: "Add a valid email address to the workspace owner account before sending the month-end summary."
       });
       return;
     }
 
-    const recipients = recipientResult.recipients;
+    const recipients = [ownerEmail];
 
     setEmailLoading("send");
     setEmailToolMessage(null);
@@ -574,6 +832,9 @@ export function SettingsView() {
         description: error instanceof Error ? error.message : "MailerSend could not send the email."
       });
     } finally {
+      if (canManageWorkspaceSettings) {
+        void loadMonthEndAutomationOverview();
+      }
       setEmailLoading(null);
     }
   }
@@ -994,22 +1255,37 @@ export function SettingsView() {
 
           <UserManagement
             canManageUsers={canManageUsers}
+            currentUserId={user.id}
+            currentWorkspaceRole={workspace.role}
             users={workspaceUsers}
             usersLoading={usersLoading}
+            deletingUserId={deletingUserId}
             inviteFullName={inviteFullName}
             inviteEmail={inviteEmail}
             inviteRole={inviteRole}
-            inviteLoading={inviteLoading}
-            onInviteFullNameChange={setInviteFullName}
-            onInviteEmailChange={setInviteEmail}
-            onInviteRoleChange={setInviteRole}
-            onInvite={inviteWorkspaceUser}
+            provisionLoading={userProvisionLoading}
+            temporaryPasswordResult={temporaryPasswordResult}
+            onInviteFullNameChange={(value) => {
+              setInviteFullName(value);
+              setTemporaryPasswordResult(null);
+            }}
+            onInviteEmailChange={(value) => {
+              setInviteEmail(value);
+              setTemporaryPasswordResult(null);
+            }}
+            onInviteRoleChange={(value) => {
+              setInviteRole(value);
+              setTemporaryPasswordResult(null);
+            }}
+            onInvite={() => provisionWorkspaceUser("email_invite")}
+            onGenerateTemporaryPassword={() => provisionWorkspaceUser("temporary_password")}
+            onCopyTemporaryPassword={copyTemporaryPassword}
+            onDeleteUser={deleteWorkspaceUser}
             onRefresh={loadWorkspaceUsers}
           />
 
           <EmailTools
-            recipients={emailRecipients}
-            onRecipientsChange={setEmailRecipients}
+            recipientEmail={ownerEmail}
             stats={emailStats}
             preview={emailPreview}
             message={emailToolMessage}
@@ -1018,6 +1294,14 @@ export function SettingsView() {
             onPreview={previewMonthEndEmail}
             onSendTest={sendMonthEndTestEmail}
           />
+
+          {canManageWorkspaceSettings ? (
+            <MonthEndAutomationSection
+              overview={automationOverview}
+              loading={automationLoading}
+              onRefresh={() => void loadMonthEndAutomationOverview()}
+            />
+          ) : null}
 
           <AdvancedTools onDemoReset={handleDemoReset} />
         </div>
@@ -1153,29 +1437,43 @@ function ToggleRow({
 
 function UserManagement({
   canManageUsers,
+  currentUserId,
+  currentWorkspaceRole,
   users,
   usersLoading,
+  deletingUserId,
   inviteFullName,
   inviteEmail,
   inviteRole,
-  inviteLoading,
+  provisionLoading,
+  temporaryPasswordResult,
   onInviteFullNameChange,
   onInviteEmailChange,
   onInviteRoleChange,
   onInvite,
+  onGenerateTemporaryPassword,
+  onCopyTemporaryPassword,
+  onDeleteUser,
   onRefresh
 }: {
   canManageUsers: boolean;
+  currentUserId: string;
+  currentWorkspaceRole: string;
   users: WorkspaceUser[];
   usersLoading: boolean;
+  deletingUserId: string | null;
   inviteFullName: string;
   inviteEmail: string;
   inviteRole: string;
-  inviteLoading: boolean;
+  provisionLoading: ProvisionMethod | null;
+  temporaryPasswordResult: TemporaryPasswordResult | null;
   onInviteFullNameChange: (value: string) => void;
   onInviteEmailChange: (value: string) => void;
   onInviteRoleChange: (value: string) => void;
   onInvite: () => Promise<void>;
+  onGenerateTemporaryPassword: () => Promise<void>;
+  onCopyTemporaryPassword: () => Promise<void>;
+  onDeleteUser: (user: WorkspaceUser) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
   function submitInvite(event: FormEvent<HTMLFormElement>) {
@@ -1196,6 +1494,13 @@ function UserManagement({
               <p className="text-sm font-black text-emerald-900">Admin invite flow</p>
               <p className="mt-1 text-sm leading-6 text-emerald-900/80">
                 Invited users receive a secure setup email, set a password, then sign in.
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-citrine-100 bg-citrine-50/55 p-4">
+              <p className="text-sm font-black text-citrine-900">Temporary password fallback</p>
+              <p className="mt-1 text-sm leading-6 text-citrine-900/80">
+                Use this when email delivery is unavailable. The password is shown once and the user must replace it before the workspace opens.
               </p>
             </div>
 
@@ -1226,16 +1531,95 @@ function UserManagement({
                 value={inviteRole}
                 onChange={(event) => onInviteRoleChange(event.target.value)}
               >
+                {currentWorkspaceRole === "owner" ? <option value="owner">Owner</option> : null}
                 <option value="member">Member</option>
                 <option value="viewer">Viewer</option>
                 <option value="admin">Admin</option>
               </select>
             </Field>
 
-            <Button type="submit" disabled={inviteLoading}>
-              <UserPlus className="size-4" />
-              {inviteLoading ? "Sending invite..." : "Invite user"}
-            </Button>
+            {currentWorkspaceRole === "owner" && inviteRole === "owner" ? (
+              <div className="rounded-lg border border-citrine-100 bg-citrine-50/55 p-4">
+                <p className="text-sm font-black text-citrine-900">Ownership transfer</p>
+                <p className="mt-1 text-sm leading-6 text-citrine-900/80">
+                  Inviting this user as Owner transfers workspace ownership to them and changes the current owner to Admin.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button type="submit" disabled={provisionLoading !== null} className="w-full">
+                <UserPlus className="size-4" />
+                {provisionLoading === "email_invite" ? "Sending invite..." : "Invite user"}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={provisionLoading !== null}
+                onClick={() => void onGenerateTemporaryPassword()}
+                className="w-full"
+              >
+                <KeyRound className="size-4" />
+                {provisionLoading === "temporary_password"
+                  ? "Generating password..."
+                  : "Generate temp password"}
+              </Button>
+            </div>
+
+            {temporaryPasswordResult ? (
+              <Card className="border-citrine-200 bg-citrine-50/45 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-citrine-950">Temporary password created</p>
+                    <p className="mt-1 text-sm leading-6 text-citrine-950/80">
+                      Share this securely with {temporaryPasswordResult.fullName || temporaryPasswordResult.email}. They will be forced to create a new password on first sign-in.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    onClick={() => void onCopyTemporaryPassword()}
+                  >
+                    <Copy className="size-4" />
+                    Copy password
+                  </Button>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.12em] text-citrine-900/70">User</p>
+                    <p className="mt-1 text-sm font-semibold text-ink-900">
+                      {temporaryPasswordResult.email}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.12em] text-citrine-900/70">Workspace role</p>
+                    <p className="mt-1 text-sm font-semibold capitalize text-ink-900">
+                      {temporaryPasswordResult.role}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-citrine-200 bg-white px-4 py-3">
+                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-citrine-900/70">Temporary password</p>
+                  <p className="mt-1 break-all font-mono text-base font-black text-ink-900">
+                    {temporaryPasswordResult.temporaryPassword}
+                  </p>
+                </div>
+
+                {temporaryPasswordResult.replacedExistingPassword ? (
+                  <p className="mt-3 text-sm font-semibold text-citrine-950/80">
+                    This email already had an account. The existing password was replaced with this temporary one.
+                  </p>
+                ) : (
+                  <p className="mt-3 text-sm font-semibold text-citrine-950/80">
+                    This account can sign in immediately with the temporary password above.
+                  </p>
+                )}
+              </Card>
+            ) : null}
           </form>
 
           <div className="min-w-0">
@@ -1285,9 +1669,35 @@ function UserManagement({
                       Added {formatDateTime(user.addedAt)}
                     </p>
                   </div>
-                  <span className="w-fit rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-600">
-                    {user.role}
-                  </span>
+                  <div className="flex flex-col gap-2 sm:items-end">
+                    <span className="w-fit rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-600">
+                      {user.role}
+                    </span>
+
+                    {canDeleteWorkspaceUser(user, currentUserId, currentWorkspaceRole) ? (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        onClick={() => void onDeleteUser(user)}
+                        disabled={deletingUserId === user.id}
+                      >
+                        <Trash2 className="size-4" />
+                        {deletingUserId === user.id ? "Deleting..." : "Delete user"}
+                      </Button>
+                    ) : (
+                      <p className="text-xs font-semibold text-ink-400">
+                        {user.id === currentUserId
+                          ? "Current account"
+                          : user.role === "owner"
+                            ? "Owner protected"
+                            : currentWorkspaceRole !== "owner" && user.role === "admin"
+                              ? "Owner required"
+                              : ""}
+                      </p>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1306,8 +1716,7 @@ function UserManagement({
 }
 
 function EmailTools({
-  recipients,
-  onRecipientsChange,
+  recipientEmail,
   stats,
   preview,
   message,
@@ -1316,8 +1725,7 @@ function EmailTools({
   onPreview,
   onSendTest
 }: {
-  recipients: string;
-  onRecipientsChange: (value: string) => void;
+  recipientEmail: string;
   stats: EmailToolStats;
   preview: EmailPreviewState;
   message: EmailToolMessage | null;
@@ -1335,15 +1743,15 @@ function EmailTools({
       <div className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
         <div className="space-y-4">
           <Field
-            label="Recipient email"
-            helper="Use commas, semicolons, or new lines for multiple internal recipients."
+            label="Delivery email"
+            helper="Manual month-end test sends go directly to the current workspace owner account."
           >
-            <textarea
-              rows={3}
-              className="field-control min-h-24 resize-y"
-              placeholder="finance@example.com"
-              value={recipients}
-              onChange={(event) => onRecipientsChange(event.target.value)}
+            <input
+              type="email"
+              className="field-control"
+              value={recipientEmail}
+              placeholder="Owner email required"
+              readOnly
             />
           </Field>
 
@@ -1352,9 +1760,18 @@ function EmailTools({
               Manual test flow
             </p>
             <p className="mt-1 text-sm leading-6 text-citrine-900/80">
-              This uses the current in-app invoice dataset from your browser. Automatic month-end sending should wait until invoices are stored in server-accessible persistence.
+              This uses the current in-app invoice dataset from your browser and sends the summary to the owner email shown above. The automatic month-end job runs server-side from the saved Supabase invoice data after deployment.
             </p>
           </div>
+
+          {!recipientEmail ? (
+            <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-4">
+              <p className="text-sm font-black text-rose-900">Owner email required</p>
+              <p className="mt-1 text-sm leading-6 text-rose-900/80">
+                Add a valid email address to the owner account before using the month-end email tools.
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <EmailStatCard
@@ -1489,6 +1906,274 @@ function EmailToolMessageCard({ message }: { message: EmailToolMessage }) {
   );
 }
 
+function MonthEndAutomationSection({
+  overview,
+  loading,
+  onRefresh
+}: {
+  overview: MonthEndAutomationOverview | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const latestActivity =
+    overview?.recentRuns[0] ??
+    overview?.lastCheck ??
+    overview?.lastSuccessfulAutoSend ??
+    overview?.lastSuccessfulManualSend ??
+    null;
+  const historyRuns = latestActivity
+    ? (overview?.recentRuns ?? []).filter((run) => run.id !== latestActivity.id)
+    : (overview?.recentRuns ?? []);
+
+  return (
+    <SectionCard
+      title="Month-end automation"
+      eyebrow="Scheduler and activity log"
+      action={<SectionIcon icon={<Database className="size-5" />} />}
+    >
+      <div className="space-y-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-black text-ink-900">Automatic owner delivery</p>
+            <p className="mt-1 text-sm leading-6 text-ink-600">
+              The cron route checks once per day, then sends only on the last local day of the month for this workspace.
+            </p>
+          </div>
+          <Button type="button" variant="secondary" onClick={onRefresh} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh activity"}
+          </Button>
+        </div>
+
+        {overview ? (
+          <>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <AutomationMetricCard
+                label="Automation status"
+                value={overview.enabled ? "Active" : "Disabled"}
+                helper={overview.enabled ? `UTC schedule ${overview.scheduleUtc}` : "Add CRON_SECRET in Vercel to enable automated delivery."}
+                tone={overview.enabled ? "success" : "warning"}
+              />
+              <AutomationMetricCard
+                label="Owner delivery"
+                value={overview.ownerEmail || "Missing"}
+                helper="Month-end email recipient"
+              />
+              <AutomationMetricCard
+                label="Workspace time zone"
+                value={overview.timeZone}
+                helper={`Local today ${overview.todayLocalDate}`}
+              />
+              <AutomationMetricCard
+                label="Next month-end"
+                value={overview.nextMonthEndDate}
+                helper="Local workspace date"
+              />
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-3">
+              <AutomationEventCard
+                title="Last check"
+                run={overview.lastCheck}
+                emptyText="No automated checks recorded yet."
+              />
+              <AutomationEventCard
+                title="Last automatic delivery"
+                run={overview.lastSuccessfulAutoSend}
+                emptyText="No successful automatic deliveries yet."
+              />
+              <AutomationEventCard
+                title="Last manual test send"
+                run={overview.lastSuccessfulManualSend}
+                emptyText="No successful manual test sends yet."
+              />
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-black text-ink-900">Latest activity</p>
+                <p className="mt-1 text-sm leading-5 text-ink-600">
+                  The newest month-end event stays visible. Older checks and sends are available in the collapsible history below.
+                </p>
+              </div>
+
+              {latestActivity ? (
+                <div className="rounded-lg border border-ink-100 bg-ink-50/65 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-700">
+                          {formatMonthEndRunType(latestActivity.runType)}
+                        </span>
+                        <span
+                          className={cn(
+                            "rounded-full px-3 py-1 text-xs font-black uppercase tracking-[0.12em]",
+                            getMonthEndRunStatusClasses(latestActivity.status)
+                          )}
+                        >
+                          {latestActivity.status}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm font-semibold text-ink-900">
+                        {formatDateTime(latestActivity.createdAt)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-600">
+                        <span>Period: {latestActivity.snapshotMonth || "Not set"}</span>
+                        <span>Recipient: {latestActivity.recipientEmail || "Not set"}</span>
+                        <span>Time zone: {latestActivity.timeZone || "Not set"}</span>
+                      </div>
+                      {latestActivity.reason ? (
+                        <p className="mt-2 text-sm leading-6 text-ink-700">{latestActivity.reason}</p>
+                      ) : null}
+                    </div>
+                    <div className="grid gap-1 text-sm text-ink-500 lg:text-right">
+                      <span>Snapshot date: {latestActivity.snapshotDate || "Not set"}</span>
+                      <span>Message ID: {latestActivity.providerMessageId || "Not sent"}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-ink-100 bg-ink-50/65 p-4 text-sm font-semibold text-ink-500">
+                  No month-end automation activity has been recorded yet.
+                </div>
+              )}
+
+              {historyRuns.length ? (
+                <div className="rounded-lg border border-ink-100 bg-white">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                    onClick={() => setHistoryOpen((current) => !current)}
+                  >
+                    <div>
+                      <p className="text-sm font-black text-ink-900">History</p>
+                      <p className="mt-1 text-sm leading-5 text-ink-600">
+                        {historyRuns.length} older month-end {historyRuns.length === 1 ? "event" : "events"}.
+                      </p>
+                    </div>
+                    <ChevronDown
+                      className={cn(
+                        "size-4 text-ink-500 transition-transform",
+                        historyOpen && "rotate-180"
+                      )}
+                    />
+                  </button>
+
+                  {historyOpen ? (
+                    <div className="space-y-3 border-t border-ink-100 px-4 py-4">
+                      {historyRuns.map((run) => (
+                        <div
+                          key={run.id}
+                          className="flex flex-col gap-3 rounded-lg border border-ink-100 bg-ink-50/65 p-3 lg:flex-row lg:items-start lg:justify-between"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-700">
+                                {formatMonthEndRunType(run.runType)}
+                              </span>
+                              <span
+                                className={cn(
+                                  "rounded-full px-3 py-1 text-xs font-black uppercase tracking-[0.12em]",
+                                  getMonthEndRunStatusClasses(run.status)
+                                )}
+                              >
+                                {run.status}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm font-semibold text-ink-900">
+                              {formatDateTime(run.createdAt)}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-600">
+                              <span>Period: {run.snapshotMonth || "Not set"}</span>
+                              <span>Recipient: {run.recipientEmail || "Not set"}</span>
+                              <span>Time zone: {run.timeZone || "Not set"}</span>
+                            </div>
+                            {run.reason ? (
+                              <p className="mt-2 text-sm leading-6 text-ink-700">{run.reason}</p>
+                            ) : null}
+                          </div>
+                          <div className="grid gap-1 text-sm text-ink-500 lg:text-right">
+                            <span>Snapshot date: {run.snapshotDate || "Not set"}</span>
+                            <span>Message ID: {run.providerMessageId || "Not sent"}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <div className="rounded-lg border border-ink-100 bg-ink-50/65 p-4 text-sm font-semibold text-ink-500">
+            {loading ? "Loading month-end automation overview..." : "Month-end automation overview is unavailable."}
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+function AutomationMetricCard({
+  label,
+  value,
+  helper,
+  tone = "neutral"
+}: {
+  label: string;
+  value: string;
+  helper: string;
+  tone?: "neutral" | "success" | "warning";
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-4",
+        tone === "success" && "border-emerald-100 bg-emerald-50/55",
+        tone === "warning" && "border-citrine-100 bg-citrine-50/55",
+        tone === "neutral" && "border-ink-100 bg-ink-50/65"
+      )}
+    >
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-ink-500">{label}</p>
+      <p className="mt-2 break-words text-base font-black text-ink-900">{value}</p>
+      <p className="mt-1 text-sm leading-5 text-ink-600">{helper}</p>
+    </div>
+  );
+}
+
+function AutomationEventCard({
+  title,
+  run,
+  emptyText
+}: {
+  title: string;
+  run: MonthEndAutomationRun | null;
+  emptyText: string;
+}) {
+  return (
+    <div className="rounded-lg border border-ink-100 bg-ink-50/65 p-4">
+      <p className="text-sm font-black text-ink-900">{title}</p>
+      {run ? (
+        <div className="mt-3 space-y-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-700">
+              {formatMonthEndRunType(run.runType)}
+            </span>
+            <span className={cn("rounded-full px-3 py-1 text-xs font-black uppercase tracking-[0.12em]", getMonthEndRunStatusClasses(run.status))}>
+              {run.status}
+            </span>
+          </div>
+          <p className="font-semibold text-ink-900">{formatDateTime(run.createdAt)}</p>
+          <p className="text-ink-600">Period {run.snapshotMonth || "Not set"}</p>
+          {run.reason ? <p className="leading-6 text-ink-700">{run.reason}</p> : null}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-ink-500">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
 function EmailPreviewSummary({ summary }: { summary: MonthEndSummary }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">
@@ -1517,6 +2202,34 @@ function EmailPreviewSection({
       </div>
     </div>
   );
+}
+
+function formatMonthEndRunType(value: MonthEndAutomationRun["runType"]) {
+  if (value === "manual_preview") {
+    return "Manual preview";
+  }
+
+  if (value === "manual_send") {
+    return "Manual send";
+  }
+
+  if (value === "auto_check") {
+    return "Auto check";
+  }
+
+  return "Auto send";
+}
+
+function getMonthEndRunStatusClasses(status: MonthEndAutomationRun["status"]) {
+  if (status === "success") {
+    return "border border-emerald-100 bg-emerald-50 text-emerald-900";
+  }
+
+  if (status === "failed") {
+    return "border border-rose-100 bg-rose-50 text-rose-900";
+  }
+
+  return "border border-citrine-100 bg-citrine-50 text-citrine-900";
 }
 
 function CurrencyOption({
@@ -1763,35 +2476,6 @@ function formatEmailToolApiError(data: EmailToolApiResponse) {
   return lines.join("\n");
 }
 
-function parseRecipients(value: string): { recipients: string[]; error?: string } {
-  const recipients = Array.from(
-    new Set(
-      value
-        .split(/[;,\n]/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-    )
-  );
-
-  if (!recipients.length) {
-    return {
-      recipients: [],
-      error: "Enter at least one internal recipient email before sending."
-    };
-  }
-
-  const invalid = recipients.filter((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
-
-  if (invalid.length) {
-    return {
-      recipients: [],
-      error: `Check recipient email format: ${invalid.join(", ")}.`
-    };
-  }
-
-  return { recipients };
-}
-
 function toMonthEndInvoiceSnapshot(invoice: Invoice): MonthEndInvoiceSnapshot {
   return {
     id: invoice.id,
@@ -1984,6 +2668,26 @@ function toWorkspaceSettingsRow(settings: WorkspaceSettings, workspaceId: string
     save_filters_by_page: settings.saveFiltersByPage,
     restore_last_view: settings.restoreLastView
   };
+}
+
+function canDeleteWorkspaceUser(
+  user: WorkspaceUser,
+  currentUserId: string,
+  currentWorkspaceRole: string
+) {
+  if (user.id === currentUserId) {
+    return false;
+  }
+
+  if (user.role === "owner") {
+    return false;
+  }
+
+  if (currentWorkspaceRole !== "owner" && user.role === "admin") {
+    return false;
+  }
+
+  return true;
 }
 
 function areSettingsEqual(left: WorkspaceSettings, right: WorkspaceSettings) {

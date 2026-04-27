@@ -14,6 +14,9 @@ export default function UpdatePasswordPage() {
   const supabase = useMemo(() => createClient(), []);
   const [loadingSession, setLoadingSession] = useState(true);
   const [hasSession, setHasSession] = useState(false);
+  const [requiresTemporaryReset, setRequiresTemporaryReset] = useState(
+    searchParams.get("reason") === "temporary-password"
+  );
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -29,13 +32,17 @@ export default function UpdatePasswordPage() {
       }
 
       setHasSession(Boolean(data.user));
+      setRequiresTemporaryReset(
+        data.user?.app_metadata?.must_change_password === true ||
+          searchParams.get("reason") === "temporary-password"
+      );
       setLoadingSession(false);
     });
 
     return () => {
       active = false;
     };
-  }, [supabase]);
+  }, [searchParams, supabase]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,6 +65,29 @@ export default function UpdatePasswordPage() {
         throw updateError;
       }
 
+      const completionResponse = await fetch("/api/auth/complete-password-reset", {
+        method: "POST",
+        headers: {
+          "X-Requested-With": "invoice-tracker-password-reset"
+        }
+      });
+      const completionData = (await completionResponse.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+
+      if (!completionResponse.ok || completionData?.error) {
+        throw new Error(completionData?.error || "Password saved, but the reset flow could not be completed.");
+      }
+
+      const { error: refreshError } = await supabase.auth.refreshSession();
+
+      if (refreshError) {
+        await supabase.auth.signOut();
+        setMessage("Password saved. Sign in again with the new password.");
+        window.setTimeout(() => router.push("/dashboard?auth=password-reset"), 700);
+        return;
+      }
+
       setMessage("Password saved. Opening your workspace...");
       window.setTimeout(() => router.push("/dashboard"), 700);
     } catch (submitError) {
@@ -74,11 +104,15 @@ export default function UpdatePasswordPage() {
           <LockKeyhole className="size-5" />
         </div>
         <p className="mt-5 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
-          Workspace invite
+          {requiresTemporaryReset ? "Temporary password" : "Workspace invite"}
         </p>
-        <h1 className="mt-2 text-3xl font-black text-ink-900">Set your password</h1>
+        <h1 className="mt-2 text-3xl font-black text-ink-900">
+          {requiresTemporaryReset ? "Replace your password" : "Set your password"}
+        </h1>
         <p className="mt-2 text-sm leading-6 text-ink-600">
-          Create a password for the invited account, then sign in to the invoice workspace.
+          {requiresTemporaryReset
+            ? "Create a new password for this account before the workspace can open."
+            : "Create a password for the invited account, then sign in to the invoice workspace."}
         </p>
 
         {loadingSession ? (

@@ -15,6 +15,7 @@ It is organized around the day-to-day workflow of invoice operations:
 - Review invoice aging, outstanding balances, and upcoming cash movement.
 - Use calendar, alert, dashboard, and analytics views to decide what needs attention next.
 - Preview and test-send a month-end invoice summary email.
+- Send month-end summaries to the workspace owner automatically on the last local day of the month.
 
 ## Main Features
 
@@ -137,9 +138,9 @@ Settings manage workspace behavior and demo controls:
 - Invite-only user management for workspace admins.
 - Saved-view and local workflow reset controls.
 - Demo data reset.
-- Month-end summary preview and test-email tooling.
+- Month-end summary preview and owner-delivery test-email tooling.
 
-The month-end email tool builds a summary of open receivables and payables grouped by currency, current items, and overdue items. Preview works inside the app. Test sending requires MailerSend configuration.
+The month-end email tool builds a summary of open receivables and payables grouped by currency, current items, and overdue items. Preview works inside the app. Manual test sending now uses the current workspace owner email automatically. Automatic month-end delivery runs from a Vercel Cron route and records send results in `email_send_logs`.
 
 ## Data and Persistence
 
@@ -197,9 +198,10 @@ APP_BASE_URL=https://your-production-domain.com
 email_api_key=your_mailersend_token
 MAIL_FROM_EMAIL=verified-sender@example.com
 MAIL_FROM_NAME=Invoice Tracker Pro
+CRON_SECRET=your_random_vercel_cron_secret
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` is required only for the server-side user invite API. Never prefix it with `NEXT_PUBLIC_`. `APP_BASE_URL` controls the domain used in invite emails, so production should use the deployed site URL instead of localhost.
+`SUPABASE_SERVICE_ROLE_KEY` is required only for trusted server routes. Never prefix it with `NEXT_PUBLIC_`. `APP_BASE_URL` controls the domain used in invite emails, so production should use the deployed site URL instead of localhost. `CRON_SECRET` secures the automated Vercel cron request.
 
 Apply the Supabase schema migration to a linked project:
 
@@ -253,11 +255,13 @@ APP_BASE_URL=https://your-production-domain.com
 email_api_key=your_mailersend_token
 MAIL_FROM_EMAIL=verified-sender@example.com
 MAIL_FROM_NAME=Invoice Tracker Pro
+CRON_SECRET=your_random_vercel_cron_secret
 ```
 
 The email code also checks `EMAIL_API_KEY` as an alternate token variable name.
 
 MailerSend requires the sender domain or email to be verified before messages can be accepted.
+Vercel Cron automatically includes `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set in the project environment.
 
 ## Project Structure
 
@@ -289,9 +293,9 @@ Key routes:
 - User access is invite-only in the app. Also disable public signups in Supabase Auth settings for defense in depth.
 - Reminder, payment scheduling, approval, hold, and proof-upload actions are UI workflow placeholders unless connected to external services.
 - Invoice attachments are uploaded on invoice creation. Editing or replacing attachments after creation is not built yet.
-- Email test sending depends on MailerSend credentials and a verified sender.
-- Automatic month-end scheduling is not built yet.
+- Email delivery depends on MailerSend credentials, a verified sender, and a configured workspace owner email.
+- Automatic month-end scheduling depends on Vercel Cron and `CRON_SECRET` being configured in the deployment environment.
 
 ## Deployment
 
-The project includes a Vercel configuration and can be deployed as a standard Next.js application. Set the Supabase public URL, Supabase publishable key, server-only Supabase service-role key, and MailerSend variables in the deployment environment.
+The project includes a Vercel configuration and can be deployed as a standard Next.js application. Set the Supabase public URL, Supabase publishable key, server-only Supabase service-role key, MailerSend variables, and `CRON_SECRET` in the deployment environment.
