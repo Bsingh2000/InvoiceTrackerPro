@@ -10,6 +10,7 @@ import {
   Globe2,
   KeyRound,
   Mail,
+  Pencil,
   RotateCcw,
   Save,
   Send,
@@ -126,6 +127,13 @@ type DeleteWorkspaceUserResponse = {
   removed?: boolean;
   accountDeleted?: boolean;
   authDeletionWarning?: string | null;
+  user?: WorkspaceUser;
+  error?: string;
+};
+
+type UpdateWorkspaceUserResponse = {
+  updated?: boolean;
+  ownershipTransferred?: boolean;
   user?: WorkspaceUser;
   error?: string;
 };
@@ -278,6 +286,9 @@ export function SettingsView() {
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [managingUser, setManagingUser] = useState<WorkspaceUser | null>(null);
+  const [manageUserRole, setManageUserRole] = useState("member");
+  const [userRoleSaving, setUserRoleSaving] = useState(false);
   const [inviteFullName, setInviteFullName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
@@ -513,6 +524,74 @@ export function SettingsView() {
     void loadMonthEndAutomationOverview();
   }, [canManageWorkspaceSettings, loadMonthEndAutomationOverview]);
 
+  function openUserManager(target: WorkspaceUser) {
+    setManagingUser(target);
+    setManageUserRole(target.role);
+  }
+
+  function closeUserManager() {
+    if (userRoleSaving || deletingUserId === managingUser?.id) {
+      return;
+    }
+
+    setManagingUser(null);
+  }
+
+  async function updateWorkspaceUserRole() {
+    if (!managingUser) {
+      return;
+    }
+
+    setUserRoleSaving(true);
+
+    try {
+      const response = await fetch("/api/workspace/users", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "invoice-tracker-settings"
+        },
+        body: JSON.stringify({
+          userId: managingUser.id,
+          role: manageUserRole
+        })
+      });
+      const data = (await response.json()) as UpdateWorkspaceUserResponse;
+
+      if (!response.ok || data.error || !data.user) {
+        throw new Error(data.error || "The workspace user role could not be updated.");
+      }
+
+      setWorkspaceUsers((current) =>
+        current.map((item) => (item.id === data.user?.id ? data.user : item))
+      );
+      setManagingUser(null);
+
+      notify({
+        title: data.ownershipTransferred ? "Ownership transferred" : "Role updated",
+        description: data.ownershipTransferred
+          ? `${data.user.email} is now the workspace owner. Reloading your session role.`
+          : `${data.user.fullName || data.user.email} is now ${formatWorkspaceRole(data.user.role)}.`,
+        variant: "success"
+      });
+
+      if (data.ownershipTransferred) {
+        window.setTimeout(() => window.location.reload(), 700);
+      }
+    } catch (error) {
+      notify({
+        title: "Role update failed",
+        description:
+          error instanceof Error
+            ? error.message
+            : "The workspace user role could not be updated.",
+        variant: "warning"
+      });
+    } finally {
+      setUserRoleSaving(false);
+    }
+  }
+
   async function provisionWorkspaceUser(deliveryMethod: ProvisionMethod) {
     setUserProvisionLoading(deliveryMethod);
 
@@ -622,8 +701,12 @@ export function SettingsView() {
     }
   }
 
-  async function deleteWorkspaceUser(target: WorkspaceUser) {
+  async function deleteWorkspaceUser(
+    target: WorkspaceUser,
+    options?: { skipConfirm?: boolean; closeManager?: boolean }
+  ) {
     if (
+      !options?.skipConfirm &&
       !window.confirm(
         `Delete ${target.fullName || target.email || "this user"} from the workspace?`
       )
@@ -651,6 +734,9 @@ export function SettingsView() {
       }
 
       setWorkspaceUsers((current) => current.filter((item) => item.id !== target.id));
+      if (options?.closeManager || managingUser?.id === target.id) {
+        setManagingUser(null);
+      }
 
       notify({
         title: data.accountDeleted ? "User deleted" : "Workspace access removed",
@@ -1260,6 +1346,9 @@ export function SettingsView() {
             users={workspaceUsers}
             usersLoading={usersLoading}
             deletingUserId={deletingUserId}
+            managingUser={managingUser}
+            manageUserRole={manageUserRole}
+            userRoleSaving={userRoleSaving}
             inviteFullName={inviteFullName}
             inviteEmail={inviteEmail}
             inviteRole={inviteRole}
@@ -1280,6 +1369,10 @@ export function SettingsView() {
             onInvite={() => provisionWorkspaceUser("email_invite")}
             onGenerateTemporaryPassword={() => provisionWorkspaceUser("temporary_password")}
             onCopyTemporaryPassword={copyTemporaryPassword}
+            onOpenUserManager={openUserManager}
+            onManageUserRoleChange={setManageUserRole}
+            onSaveUserRole={updateWorkspaceUserRole}
+            onCloseUserManager={closeUserManager}
             onDeleteUser={deleteWorkspaceUser}
             onRefresh={loadWorkspaceUsers}
           />
@@ -1442,6 +1535,9 @@ function UserManagement({
   users,
   usersLoading,
   deletingUserId,
+  managingUser,
+  manageUserRole,
+  userRoleSaving,
   inviteFullName,
   inviteEmail,
   inviteRole,
@@ -1453,6 +1549,10 @@ function UserManagement({
   onInvite,
   onGenerateTemporaryPassword,
   onCopyTemporaryPassword,
+  onOpenUserManager,
+  onManageUserRoleChange,
+  onSaveUserRole,
+  onCloseUserManager,
   onDeleteUser,
   onRefresh
 }: {
@@ -1462,6 +1562,9 @@ function UserManagement({
   users: WorkspaceUser[];
   usersLoading: boolean;
   deletingUserId: string | null;
+  managingUser: WorkspaceUser | null;
+  manageUserRole: string;
+  userRoleSaving: boolean;
   inviteFullName: string;
   inviteEmail: string;
   inviteRole: string;
@@ -1473,7 +1576,14 @@ function UserManagement({
   onInvite: () => Promise<void>;
   onGenerateTemporaryPassword: () => Promise<void>;
   onCopyTemporaryPassword: () => Promise<void>;
-  onDeleteUser: (user: WorkspaceUser) => Promise<void>;
+  onOpenUserManager: (user: WorkspaceUser) => void;
+  onManageUserRoleChange: (value: string) => void;
+  onSaveUserRole: () => Promise<void>;
+  onCloseUserManager: () => void;
+  onDeleteUser: (
+    user: WorkspaceUser,
+    options?: { skipConfirm?: boolean; closeManager?: boolean }
+  ) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
   function submitInvite(event: FormEvent<HTMLFormElement>) {
@@ -1670,33 +1780,36 @@ function UserManagement({
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:items-end">
-                    <span className="w-fit rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-600">
-                      {user.role}
-                    </span>
+                    <div className="flex w-full flex-wrap items-center justify-end gap-2">
+                      <span className="w-fit rounded-full border border-ink-200 bg-white px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-ink-600">
+                        {user.role}
+                      </span>
 
-                    {canDeleteWorkspaceUser(user, currentUserId, currentWorkspaceRole) ? (
-                      <Button
-                        type="button"
-                        variant="danger"
-                        size="sm"
-                        className="w-full sm:w-auto"
-                        onClick={() => void onDeleteUser(user)}
-                        disabled={deletingUserId === user.id}
-                      >
-                        <Trash2 className="size-4" />
-                        {deletingUserId === user.id ? "Deleting..." : "Delete user"}
-                      </Button>
-                    ) : (
+                      {canManageWorkspaceUser(user, currentUserId) ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          className="size-9 px-0"
+                          onClick={() => onOpenUserManager(user)}
+                          aria-label={`Manage ${user.fullName || user.email || "workspace user"}`}
+                        >
+                          <Pencil className="size-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    {!canManageWorkspaceUser(user, currentUserId) ? (
                       <p className="text-xs font-semibold text-ink-400">
                         {user.id === currentUserId
                           ? "Current account"
                           : user.role === "owner"
                             ? "Owner protected"
-                            : currentWorkspaceRole !== "owner" && user.role === "admin"
-                              ? "Owner required"
-                              : ""}
+                            : ""}
                       </p>
-                    )}
+                    ) : currentWorkspaceRole !== "owner" && user.role === "admin" ? (
+                      <p className="text-xs font-semibold text-ink-400">Owner required to delete</p>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -1711,7 +1824,167 @@ function UserManagement({
           </p>
         </div>
       )}
+
+      <ManageWorkspaceUserDialog
+        open={Boolean(managingUser)}
+        user={managingUser}
+        currentWorkspaceRole={currentWorkspaceRole}
+        currentUserId={currentUserId}
+        selectedRole={manageUserRole}
+        saving={userRoleSaving}
+        deleting={deletingUserId === managingUser?.id}
+        onRoleChange={onManageUserRoleChange}
+        onClose={onCloseUserManager}
+        onSave={onSaveUserRole}
+        onDelete={() =>
+          managingUser
+            ? onDeleteUser(managingUser, { skipConfirm: true, closeManager: true })
+            : Promise.resolve()
+        }
+      />
     </SectionCard>
+  );
+}
+
+function ManageWorkspaceUserDialog({
+  open,
+  user,
+  currentWorkspaceRole,
+  currentUserId,
+  selectedRole,
+  saving,
+  deleting,
+  onRoleChange,
+  onClose,
+  onSave,
+  onDelete
+}: {
+  open: boolean;
+  user: WorkspaceUser | null;
+  currentWorkspaceRole: string;
+  currentUserId: string;
+  selectedRole: string;
+  saving: boolean;
+  deleting: boolean;
+  onRoleChange: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
+}) {
+  if (!open || !user) {
+    return null;
+  }
+
+  const canDelete = canDeleteWorkspaceUser(user, currentUserId, currentWorkspaceRole);
+  const canTransferOwnership = currentWorkspaceRole === "owner";
+  const roleUnchanged = selectedRole === user.role;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/45 px-4 py-6 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manage-user-title"
+        className="w-full max-w-lg rounded-lg border border-ink-200 bg-white p-5 shadow-luxury"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
+              User management
+            </p>
+            <h2 id="manage-user-title" className="mt-2 text-2xl font-black text-ink-900">
+              Update workspace user
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-ink-600">
+              Review the user role or remove access from this workspace.
+            </p>
+          </div>
+          <div className="rounded-lg border border-ink-100 bg-ink-50 px-3 py-2 text-right">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-ink-500">
+              Added
+            </p>
+            <p className="mt-1 text-sm font-black text-ink-900">{formatDateTime(user.addedAt)}</p>
+          </div>
+        </div>
+
+        <div className="mt-6 space-y-4">
+          <div className="rounded-lg border border-ink-100 bg-ink-50/65 p-4">
+            <p className="text-sm font-black text-ink-900">{user.fullName || "Workspace user"}</p>
+            <p className="mt-1 text-sm font-semibold text-ink-600">{user.email || "Email pending"}</p>
+          </div>
+
+          <Field label="Workspace role">
+            <select
+              className="field-control"
+              value={selectedRole}
+              onChange={(event) => onRoleChange(event.target.value)}
+              disabled={saving || deleting}
+            >
+              {canTransferOwnership ? <option value="owner">Owner</option> : null}
+              <option value="member">Member</option>
+              <option value="viewer">Viewer</option>
+              <option value="admin">Admin</option>
+            </select>
+          </Field>
+
+          {canTransferOwnership && selectedRole === "owner" ? (
+            <div className="rounded-lg border border-citrine-100 bg-citrine-50/55 p-4">
+              <p className="text-sm font-black text-citrine-900">Ownership transfer</p>
+              <p className="mt-1 text-sm leading-6 text-citrine-900/80">
+                Saving this change will make {user.fullName || user.email} the workspace owner and change the current owner to Admin.
+              </p>
+            </div>
+          ) : null}
+
+          {!canDelete ? (
+            <div className="rounded-lg border border-ink-100 bg-ink-50/65 p-4">
+              <p className="text-sm font-black text-ink-900">Delete access unavailable</p>
+              <p className="mt-1 text-sm leading-6 text-ink-600">
+                {user.role === "admin" && currentWorkspaceRole !== "owner"
+                  ? "Only the workspace owner can delete another admin."
+                  : "This account cannot be deleted from this panel."}
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex-1">
+            {canDelete ? (
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => void onDelete()}
+                disabled={saving || deleting}
+                className="w-full sm:w-auto"
+              >
+                <Trash2 className="size-4" />
+                {deleting ? "Deleting..." : "Delete user"}
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex flex-col-reverse gap-3 sm:flex-row">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onClose}
+              disabled={saving || deleting}
+              className="sm:min-w-32"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void onSave()}
+              disabled={saving || deleting || roleUnchanged}
+              className="sm:min-w-32"
+            >
+              {saving ? "Saving..." : "Save role"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2688,6 +2961,22 @@ function canDeleteWorkspaceUser(
   }
 
   return true;
+}
+
+function canManageWorkspaceUser(user: WorkspaceUser, currentUserId: string) {
+  if (user.id === currentUserId) {
+    return false;
+  }
+
+  if (user.role === "owner") {
+    return false;
+  }
+
+  return true;
+}
+
+function formatWorkspaceRole(role: string) {
+  return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 function areSettingsEqual(left: WorkspaceSettings, right: WorkspaceSettings) {

@@ -234,6 +234,64 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
+export async function PATCH(request: NextRequest) {
+  try {
+    const { admin, workspaceId, user: actorUser, role: actorRole } = await requireWorkspaceAdmin();
+    const body = (await request.json()) as Record<string, unknown>;
+    const targetUserId = normalizeUserId(body.userId);
+    const nextRole = normalizeRole(body.role);
+
+    if (targetUserId === actorUser.id) {
+      throw new ApiError("You cannot change your own role from this panel.", 409);
+    }
+
+    const targetMembership = await getWorkspaceMember(admin, workspaceId, targetUserId);
+
+    if (!targetMembership) {
+      throw new ApiError("This user is not part of the workspace anymore.", 404);
+    }
+
+    const currentTargetRole = targetMembership.role as InviteRole;
+
+    if (currentTargetRole === "owner" && nextRole !== "owner") {
+      throw new ApiError("Transfer workspace ownership instead of changing the current owner role.", 409);
+    }
+
+    if (nextRole === "owner" && actorRole !== "owner") {
+      throw new ApiError("Only the current workspace owner can transfer ownership.", 403);
+    }
+
+    if (currentTargetRole !== nextRole) {
+      if (nextRole === "owner") {
+        await transferWorkspaceOwnership(admin, workspaceId, actorUser.id, targetUserId);
+      } else {
+        const { error: updateMembershipError } = await admin
+          .from("workspace_members")
+          .update({ role: nextRole })
+          .eq("id", targetMembership.id);
+
+        if (updateMembershipError) {
+          throw new ApiError(updateMembershipError.message, 500);
+        }
+      }
+    }
+
+    const updatedUser = await getWorkspaceUser(admin, workspaceId, targetUserId);
+
+    if (!updatedUser) {
+      throw new ApiError("The updated workspace user could not be loaded.", 500);
+    }
+
+    return NextResponse.json({
+      updated: true,
+      ownershipTransferred: nextRole === "owner" && currentTargetRole !== "owner",
+      user: updatedUser
+    });
+  } catch (error) {
+    return toErrorResponse(error);
+  }
+}
+
 async function requireWorkspaceAdmin() {
   const supabase = await createClient();
   const {
@@ -312,6 +370,58 @@ async function listWorkspaceUsers(admin: ReturnType<typeof createAdminClient>, w
       addedAt: member.created_at
     };
   });
+}
+
+async function getWorkspaceMember(
+  admin: ReturnType<typeof createAdminClient>,
+  workspaceId: string,
+  userId: string
+) {
+  const { data, error } = await admin
+    .from("workspace_members")
+    .select("id, user_id, role, created_at")
+    .eq("workspace_id", workspaceId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new ApiError(error.message, 500);
+  }
+
+  return (data as WorkspaceMemberRow | null) ?? null;
+}
+
+async function getWorkspaceUser(
+  admin: ReturnType<typeof createAdminClient>,
+  workspaceId: string,
+  userId: string
+) {
+  const member = await getWorkspaceMember(admin, workspaceId, userId);
+
+  if (!member) {
+    return null;
+  }
+
+  const { data: profileRow, error: profileError } = await admin
+    .from("profiles")
+    .select("id, email, full_name")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profileError) {
+    throw new ApiError(profileError.message, 500);
+  }
+
+  const profile = (profileRow as ProfileRow | null) ?? null;
+
+  return {
+    id: member.user_id,
+    membershipId: member.id,
+    fullName: profile?.full_name ?? "",
+    email: profile?.email ?? "",
+    role: member.role,
+    addedAt: member.created_at
+  };
 }
 
 async function findAuthUserByEmail(admin: ReturnType<typeof createAdminClient>, email: string) {
@@ -702,7 +812,7 @@ function normalizeUserId(value: unknown) {
   const userId = String(value ?? "").trim();
 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
-    throw new ApiError("Choose a valid workspace user to delete.");
+    throw new ApiError("Choose a valid workspace user.");
   }
 
   return userId;
