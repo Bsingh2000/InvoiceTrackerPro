@@ -17,7 +17,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 type AutomationResult = {
   workspaceId: string;
   workspaceName: string;
-  ownerEmail: string;
+  businessEmail: string;
   timeZone: string;
   localDate: string;
   status: "sent" | "skipped" | "failed";
@@ -37,12 +37,12 @@ export async function GET(request: NextRequest) {
     for (const target of targets) {
       const localDate = getTimeZoneDateString(now, target.timeZone);
 
-      if (!target.ownerEmail) {
+      if (!target.businessEmail) {
         await safeRecordAutoRun(admin, {
           workspaceId: target.workspaceId,
           runType: "auto_check",
           status: "failed",
-          reason: "Owner account is missing an email address.",
+          reason: "Business email is missing in workspace settings.",
           snapshotMonth: localDate.slice(0, 7),
           snapshotDate: localDate,
           timeZone: target.timeZone
@@ -51,11 +51,11 @@ export async function GET(request: NextRequest) {
         results.push({
           workspaceId: target.workspaceId,
           workspaceName: target.workspaceName,
-          ownerEmail: "",
+          businessEmail: "",
           timeZone: target.timeZone,
           localDate,
           status: "skipped",
-          reason: "Owner account is missing an email address."
+          reason: "Business email is missing in workspace settings."
         });
         continue;
       }
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
           runType: "auto_check",
           status: "skipped",
           reason: "Not the last day of the month in the workspace time zone.",
-          recipientEmail: target.ownerEmail,
+          recipientEmail: target.businessEmail,
           snapshotMonth: localDate.slice(0, 7),
           snapshotDate: localDate,
           timeZone: target.timeZone
@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
         results.push({
           workspaceId: target.workspaceId,
           workspaceName: target.workspaceName,
-          ownerEmail: target.ownerEmail,
+          businessEmail: target.businessEmail,
           timeZone: target.timeZone,
           localDate,
           status: "skipped",
@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
           runType: "auto_check",
           status: "skipped",
           reason: "Month-end summary already sent for this period.",
-          recipientEmail: target.ownerEmail,
+          recipientEmail: target.businessEmail,
           snapshotMonth: periodMonth,
           snapshotDate: localDate,
           timeZone: target.timeZone
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
         results.push({
           workspaceId: target.workspaceId,
           workspaceName: target.workspaceName,
-          ownerEmail: target.ownerEmail,
+          businessEmail: target.businessEmail,
           timeZone: target.timeZone,
           localDate,
           status: "skipped",
@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
           runType: "auto_check",
           status: "success",
           reason: "Last day of month confirmed. Delivery attempt started.",
-          recipientEmail: target.ownerEmail,
+          recipientEmail: target.businessEmail,
           snapshotMonth: periodMonth,
           snapshotDate: localDate,
           timeZone: target.timeZone
@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
           snapshotDate: localDate
         });
         const email = renderMonthEndSummary(summary);
-        const recipients = [target.ownerEmail];
+        const recipients = [target.businessEmail];
         const sendResult = await sendMailerSendEmail({
           to: recipients,
           subject: email.subject,
@@ -143,7 +143,7 @@ export async function GET(request: NextRequest) {
             runType: "auto_send",
             status: "failed",
             reason: sendResult.error,
-            recipientEmail: target.ownerEmail,
+            recipientEmail: target.businessEmail,
             snapshotMonth: periodMonth,
             snapshotDate: summary.snapshotDate,
             timeZone: target.timeZone,
@@ -169,7 +169,7 @@ export async function GET(request: NextRequest) {
           results.push({
             workspaceId: target.workspaceId,
             workspaceName: target.workspaceName,
-            ownerEmail: target.ownerEmail,
+            businessEmail: target.businessEmail,
             timeZone: target.timeZone,
             localDate,
             status: "failed",
@@ -205,7 +205,7 @@ export async function GET(request: NextRequest) {
           workspaceId: target.workspaceId,
           runType: "auto_send",
           status: "success",
-          recipientEmail: target.ownerEmail,
+          recipientEmail: target.businessEmail,
           snapshotMonth: periodMonth,
           snapshotDate: summary.snapshotDate,
           timeZone: target.timeZone,
@@ -220,7 +220,7 @@ export async function GET(request: NextRequest) {
         results.push({
           workspaceId: target.workspaceId,
           workspaceName: target.workspaceName,
-          ownerEmail: target.ownerEmail,
+          businessEmail: target.businessEmail,
           timeZone: target.timeZone,
           localDate,
           status: "sent",
@@ -234,7 +234,7 @@ export async function GET(request: NextRequest) {
           runType: "auto_send",
           status: "failed",
           reason,
-          recipientEmail: target.ownerEmail,
+          recipientEmail: target.businessEmail,
           snapshotMonth: periodMonth,
           snapshotDate: localDate,
           timeZone: target.timeZone
@@ -243,7 +243,7 @@ export async function GET(request: NextRequest) {
         await safeRecordAutoLog(admin, {
           workspaceId: target.workspaceId,
           subject: `Month-End Invoice Summary - ${periodMonth}`,
-          recipients: [target.ownerEmail],
+          recipients: [target.businessEmail],
           periodMonth,
           monthLabel: periodMonth,
           snapshotDate: localDate,
@@ -255,7 +255,7 @@ export async function GET(request: NextRequest) {
         results.push({
           workspaceId: target.workspaceId,
           workspaceName: target.workspaceName,
-          ownerEmail: target.ownerEmail,
+          businessEmail: target.businessEmail,
           timeZone: target.timeZone,
           localDate,
           status: "failed",

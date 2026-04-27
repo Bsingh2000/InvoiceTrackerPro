@@ -36,7 +36,7 @@ export async function GET() {
       scheduleUtc: "0 5 * * *",
       workspaceId: target.workspaceId,
       workspaceName: target.workspaceName,
-      ownerEmail: target.ownerEmail,
+      businessEmail: target.businessEmail,
       timeZone: target.timeZone,
       todayLocalDate,
       nextMonthEndDate,

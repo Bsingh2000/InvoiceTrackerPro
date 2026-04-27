@@ -13,6 +13,7 @@ type WorkspaceRow = {
 
 type WorkspaceSettingsRow = {
   workspace_id: string;
+  finance_email: string | null;
   time_zone: string | null;
 };
 
@@ -39,9 +40,7 @@ type InvoiceRow = {
 export type WorkspaceMonthEndTarget = {
   workspaceId: string;
   workspaceName: string;
-  ownerId: string;
-  ownerEmail: string;
-  ownerFullName: string;
+  businessEmail: string;
   timeZone: string;
 };
 
@@ -125,15 +124,23 @@ export async function getWorkspaceOwner(admin: AdminClient, workspaceId: string)
 }
 
 export async function getWorkspaceMonthEndTarget(admin: AdminClient, workspaceId: string) {
-  const owner = await getWorkspaceOwner(admin, workspaceId);
+  const { data: workspaceRow, error: workspaceError } = await admin
+    .from("workspaces")
+    .select("id, owner_id, name")
+    .eq("id", workspaceId)
+    .maybeSingle();
 
-  if (!owner) {
+  if (workspaceError) {
+    throw new Error(workspaceError.message);
+  }
+
+  if (!workspaceRow) {
     return null;
   }
 
   const { data: settingsRow, error: settingsError } = await admin
     .from("workspace_settings")
-    .select("workspace_id, time_zone")
+    .select("workspace_id, finance_email, time_zone")
     .eq("workspace_id", workspaceId)
     .maybeSingle();
 
@@ -142,7 +149,9 @@ export async function getWorkspaceMonthEndTarget(admin: AdminClient, workspaceId
   }
 
   return {
-    ...owner,
+    workspaceId: (workspaceRow as WorkspaceRow).id,
+    workspaceName: (workspaceRow as WorkspaceRow).name,
+    businessEmail: ((settingsRow as WorkspaceSettingsRow | null)?.finance_email ?? "").trim().toLowerCase(),
     timeZone: ((settingsRow as WorkspaceSettingsRow | null)?.time_zone ?? "").trim() || "America/Port_of_Spain"
   };
 }
@@ -164,45 +173,26 @@ export async function listMonthEndTargets(admin: AdminClient): Promise<Workspace
   }
 
   const workspaceIds = workspaces.map((workspace) => workspace.id);
-  const ownerIds = Array.from(new Set(workspaces.map((workspace) => workspace.owner_id)));
-
-  const [{ data: settingsRows, error: settingsError }, { data: profileRows, error: profileError }] =
-    await Promise.all([
-      admin
-        .from("workspace_settings")
-        .select("workspace_id, time_zone")
-        .in("workspace_id", workspaceIds),
-      admin
-        .from("profiles")
-        .select("id, email, full_name")
-        .in("id", ownerIds)
-    ]);
+  const { data: settingsRows, error: settingsError } = await admin
+    .from("workspace_settings")
+    .select("workspace_id, finance_email, time_zone")
+    .in("workspace_id", workspaceIds);
 
   if (settingsError) {
     throw new Error(settingsError.message);
   }
 
-  if (profileError) {
-    throw new Error(profileError.message);
-  }
-
   const settingsByWorkspaceId = new Map(
     ((settingsRows ?? []) as WorkspaceSettingsRow[]).map((row) => [row.workspace_id, row])
   );
-  const profilesById = new Map(
-    ((profileRows ?? []) as ProfileRow[]).map((row) => [row.id, row])
-  );
 
   return workspaces.map((workspace) => {
-    const ownerProfile = profilesById.get(workspace.owner_id);
     const workspaceSettings = settingsByWorkspaceId.get(workspace.id);
 
     return {
       workspaceId: workspace.id,
       workspaceName: workspace.name,
-      ownerId: workspace.owner_id,
-      ownerEmail: ownerProfile?.email?.trim().toLowerCase() ?? "",
-      ownerFullName: ownerProfile?.full_name?.trim() ?? "",
+      businessEmail: workspaceSettings?.finance_email?.trim().toLowerCase() ?? "",
       timeZone: workspaceSettings?.time_zone?.trim() || "America/Port_of_Spain"
     };
   });

@@ -157,7 +157,7 @@ type MonthEndAutomationOverview = {
   scheduleUtc: string;
   workspaceId: string;
   workspaceName: string;
-  ownerEmail: string;
+  businessEmail: string;
   timeZone: string;
   todayLocalDate: string;
   nextMonthEndDate: string;
@@ -173,7 +173,7 @@ type MonthEndAutomationOverviewResponse = {
   scheduleUtc?: string;
   workspaceId?: string;
   workspaceName?: string;
-  ownerEmail?: string;
+  businessEmail?: string;
   timeZone?: string;
   todayLocalDate?: string;
   nextMonthEndDate?: string;
@@ -297,19 +297,7 @@ export function SettingsView() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const canManageUsers = workspace.role === "owner" || workspace.role === "admin";
   const canManageWorkspaceSettings = workspace.role === "owner" || workspace.role === "admin";
-  const ownerEmail = useMemo(() => {
-    const ownerUser = workspaceUsers.find((workspaceUser) => workspaceUser.role === "owner");
-
-    if (ownerUser?.email) {
-      return ownerUser.email;
-    }
-
-    if (workspace.role === "owner" && user.email) {
-      return user.email;
-    }
-
-    return "";
-  }, [user.email, workspace.role, workspaceUsers]);
+  const businessEmail = useMemo(() => savedSettings.financeEmail.trim().toLowerCase(), [savedSettings.financeEmail]);
 
   useEffect(() => {
     let active = true;
@@ -485,7 +473,7 @@ export function SettingsView() {
         scheduleUtc: data.scheduleUtc,
         workspaceId: data.workspaceId,
         workspaceName: data.workspaceName ?? "",
-        ownerEmail: data.ownerEmail ?? "",
+        businessEmail: data.businessEmail ?? "",
         timeZone: data.timeZone,
         todayLocalDate: data.todayLocalDate,
         nextMonthEndDate: data.nextMonthEndDate,
@@ -875,16 +863,16 @@ export function SettingsView() {
   }
 
   async function sendMonthEndTestEmail() {
-    if (!ownerEmail) {
+    if (!businessEmail) {
       setEmailToolMessage({
         tone: "warning",
-        title: "Owner email missing",
-        description: "Add a valid email address to the workspace owner account before sending the month-end summary."
+        title: "Business email missing",
+        description: "Add a valid business email in workspace settings before sending the month-end summary."
       });
       return;
     }
 
-    const recipients = [ownerEmail];
+    const recipients = [businessEmail];
 
     setEmailLoading("send");
     setEmailToolMessage(null);
@@ -961,7 +949,7 @@ export function SettingsView() {
                   onChange={(event) => updateSetting("businessName", event.target.value)}
                 />
               </Field>
-              <Field label="Finance contact email">
+              <Field label="Business email">
                 <input
                   type="email"
                   className="field-control"
@@ -1378,7 +1366,7 @@ export function SettingsView() {
           />
 
           <EmailTools
-            recipientEmail={ownerEmail}
+            recipientEmail={businessEmail}
             stats={emailStats}
             preview={emailPreview}
             message={emailToolMessage}
@@ -2017,13 +2005,13 @@ function EmailTools({
         <div className="space-y-4">
           <Field
             label="Delivery email"
-            helper="Manual month-end test sends go directly to the current workspace owner account."
+            helper="Manual month-end test sends go directly to the saved business email from workspace settings."
           >
             <input
               type="email"
               className="field-control"
               value={recipientEmail}
-              placeholder="Owner email required"
+              placeholder="Business email required"
               readOnly
             />
           </Field>
@@ -2033,15 +2021,15 @@ function EmailTools({
               Manual test flow
             </p>
             <p className="mt-1 text-sm leading-6 text-citrine-900/80">
-              This uses the current in-app invoice dataset from your browser and sends the summary to the owner email shown above. The automatic month-end job runs server-side from the saved Supabase invoice data after deployment.
+              This uses the current in-app invoice dataset from your browser and sends the summary to the business email shown above. The automatic month-end job runs server-side from the saved Supabase invoice data after deployment.
             </p>
           </div>
 
           {!recipientEmail ? (
             <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-4">
-              <p className="text-sm font-black text-rose-900">Owner email required</p>
+              <p className="text-sm font-black text-rose-900">Business email required</p>
               <p className="mt-1 text-sm leading-6 text-rose-900/80">
-                Add a valid email address to the owner account before using the month-end email tools.
+                Add a valid business email in workspace settings before using the month-end email tools.
               </p>
             </div>
           ) : null}
@@ -2208,7 +2196,7 @@ function MonthEndAutomationSection({
       <div className="space-y-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-black text-ink-900">Automatic owner delivery</p>
+            <p className="text-sm font-black text-ink-900">Automatic business email delivery</p>
             <p className="mt-1 text-sm leading-6 text-ink-600">
               The cron route checks once per day, then sends only on the last local day of the month for this workspace.
             </p>
@@ -2228,8 +2216,8 @@ function MonthEndAutomationSection({
                 tone={overview.enabled ? "success" : "warning"}
               />
               <AutomationMetricCard
-                label="Owner delivery"
-                value={overview.ownerEmail || "Missing"}
+                label="Business email"
+                value={overview.businessEmail || "Missing"}
                 helper="Month-end email recipient"
               />
               <AutomationMetricCard

@@ -15,7 +15,7 @@ It is organized around the day-to-day workflow of invoice operations:
 - Review invoice aging, outstanding balances, and upcoming cash movement.
 - Use calendar, alert, dashboard, and analytics views to decide what needs attention next.
 - Preview and test-send a month-end invoice summary email.
-- Send month-end summaries to the workspace owner automatically on the last local day of the month.
+- Send month-end summaries to the workspace business email automatically on the last local day of the month.
 
 ## Main Features
 
@@ -140,7 +140,7 @@ Settings manage workspace behavior and demo controls:
 - Demo data reset.
 - Month-end summary preview and owner-delivery test-email tooling.
 
-The month-end email tool builds a summary of open receivables and payables grouped by currency, current items, and overdue items. Preview works inside the app. Manual test sending now uses the current workspace owner email automatically. Automatic month-end delivery runs from a Vercel Cron route and records send results in `email_send_logs`.
+The month-end email tool builds a summary of open receivables and payables grouped by currency, current items, and overdue items. Preview works inside the app. Manual test sending now uses the saved workspace business email automatically. Automatic month-end delivery runs from a Vercel Cron route and records send results in `email_send_logs`.
 
 ## Data and Persistence
 
@@ -293,7 +293,7 @@ Key routes:
 - User access is invite-only in the app. Also disable public signups in Supabase Auth settings for defense in depth.
 - Reminder, payment scheduling, approval, hold, and proof-upload actions are UI workflow placeholders unless connected to external services.
 - Invoice attachments are uploaded on invoice creation. Editing or replacing attachments after creation is not built yet.
-- Email delivery depends on MailerSend credentials, a verified sender, and a configured workspace owner email.
+- Email delivery depends on MailerSend credentials, a verified sender, and a configured workspace business email.
 - Automatic month-end scheduling depends on Vercel Cron and `CRON_SECRET` being configured in the deployment environment.
 
 ## Deployment

@@ -309,6 +309,7 @@ async function requireWorkspaceAdmin() {
     .select("workspace_id, role")
     .eq("user_id", user.id)
     .in("role", ["owner", "admin"])
+    .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
 

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildMonthEndSummary } from "@/lib/email/build-month-end-summary";
 import {
   getWorkspaceMembership,
-  getWorkspaceOwner,
+  getWorkspaceMonthEndTarget,
   recordEmailSendLog,
   recordMonthEndJobRun
 } from "@/lib/email/month-end-server";
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     const adminContext = await requireWorkspaceAdminForMonthEndEmail();
     const summary = buildMonthEndSummary(parsed.data);
     const email = renderMonthEndSummary(summary);
-    const recipients = [adminContext.ownerEmail];
+    const recipients = [adminContext.businessEmail];
     const sendResult = await sendMailerSendEmail({
       to: recipients,
       subject: email.subject,
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
       await safeRecordManualSendRun(adminContext.admin, {
         workspaceId: adminContext.workspaceId,
         createdBy: adminContext.userId,
-        recipientEmail: adminContext.ownerEmail,
+        recipientEmail: adminContext.businessEmail,
         snapshotMonth: summary.snapshotDate.slice(0, 7),
         snapshotDate: summary.snapshotDate,
         status: "failed",
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
     await safeRecordManualSendRun(adminContext.admin, {
       workspaceId: adminContext.workspaceId,
       createdBy: adminContext.userId,
-      recipientEmail: adminContext.ownerEmail,
+      recipientEmail: adminContext.businessEmail,
       snapshotMonth: summary.snapshotDate.slice(0, 7),
       snapshotDate: summary.snapshotDate,
       status: "success",
@@ -174,16 +174,16 @@ async function requireWorkspaceAdminForMonthEndEmail() {
     throw new ApiError("Only workspace owners and admins can send month-end summary emails.", 403);
   }
 
-  const owner = await getWorkspaceOwner(admin, membership.workspaceId);
+  const target = await getWorkspaceMonthEndTarget(admin, membership.workspaceId);
 
-  if (!owner?.ownerEmail) {
-    throw new ApiError("The workspace owner does not have a valid email address yet.", 409);
+  if (!target?.businessEmail) {
+    throw new ApiError("The workspace business email is not configured yet.", 409);
   }
 
   return {
     admin,
     workspaceId: membership.workspaceId,
-    ownerEmail: owner.ownerEmail,
+    businessEmail: target.businessEmail,
     userId: user.id
   };
 }
